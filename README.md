@@ -11,6 +11,7 @@
 | `usr/bin/netmon-unified` | `/usr/bin/netmon-unified` | **v2 统一脚本**：合并设备清单 + conntrack 实时流量 + App 端口分类 |
 | `usr/bin/netmon-bandwidth.py` | `/usr/bin/netmon-bandwidth.py` | 带宽采样器（对 conntrack 双采样，输出实时 Kbps/Mbps） |
 | `usr/bin/netmon-apptrace.py` | `/usr/bin/netmon-apptrace.py` | **v3 App 追踪**：通过 DNS 日志识别抖音/小红书/微信等 App 使用情况 |
+| `usr/bin/netmon-report` | `/usr/bin/netmon-report` | **v5 每日采集**：合并设备+App 生成按日期快照（JSON+MD）到 `/etc/netmon-reports/`，由 cron 23:30 触发 |
 | `usr/share/netmon/oui.txt` | `/usr/share/netmon/oui.txt` | 精简 OUI→厂商 文本库（39984 条，1.2MB） |
 | `usr/lib/lua/luci/controller/netmon.lua` | `/usr/lib/lua/luci/controller/netmon.lua` | LuCI 菜单挂载 |
 | `usr/lib/lua/luci/view/netmon/devices.htm` | `/usr/lib/lua/luci/view/netmon/devices.htm` | LuCI 设备列表页（含流量 + App 标签） |
@@ -22,7 +23,7 @@
 > 说明：NetMon 运行在路由器本地，模块文件需放到路由器存储里。
 
 ### 方式一 · `.ipk` 图形化安装（推荐，无需 SSH）
-1. 把生成的 `netmon_1.0.0-1_all.ipk` 拷到你的电脑。
+1. 把生成的 `netmon_1.0.1-1_all.ipk` 拷到你的电脑。
 2. 登录路由器 LuCI → **系统 → 软件 → 上传软件包**，选该 `.ipk` 安装。
 3. 装完自动赋权 + 重启 uhttpd，菜单立即生效。
 > 若软件页提示空间不足（Cudy TR3000 128M 一般够用），在「系统 → 软件 → 配置」把软件源指向 overlay 或外挂 U 盘。
@@ -59,6 +60,22 @@ ROUTER_HOST=192.168.6.1 ./deploy.sh          # 自定义网关地址
 - 随机 MAC 红色徽章（带说明：iOS/Android 私有地址，无法追溯厂商）
 - 顶部统计卡片 + 刷新倒计时进度条，每 15 秒自动刷新，响应式适配手机/电脑
 
+## 每日采集报告
+
+通过 `netmon-report` + cron，每天 **23:30** 自动生成一份快照，存到 `/etc/netmon-reports/`：
+
+- `netmon-YYYY-MM-DD.json` —— 程序可读的完整数据（设备、流量、App 使用、全局排行）
+- `netmon-YYYY-MM-DD.md` —— 人类可读表格报告（可直接发同事 / 存档）
+
+每天一份，自动保留最近 **90 天**，更旧的自动清理。cron 任务由 `.ipk` 的 `postinst` 自动写入（或手动加一行 `30 23 * * * /usr/bin/netmon-report >> /etc/netmon-reports/cron.log 2>&1` 到 `/etc/crontabs/root` 并 `/etc/init.d/cron restart`）。
+
+手动运行 / 查看历史：
+```sh
+/usr/bin/netmon-report                      # 立即生成今日报告
+ls -1 /etc/netmon-reports/                  # 列出所有历史
+cat /etc/netmon-reports/netmon-$(date +%F).md   # 看今天这份
+```
+
 ## 数据来源与判定逻辑
 
 - `/tmp/dhcp.leases`：dnsmasq 租约，字段 `到期时间戳 MAC IP 主机名 客户端ID`。主机名由设备自报，**不受随机 MAC 影响**——这是识别 iPhone/安卓最可靠的依据。
@@ -93,7 +110,7 @@ ROUTER_HOST=192.168.6.1 ./deploy.sh          # 自定义网关地址
 改了上面的脚本或页面后，重新生成安装包：
 
 ```sh
-python3 build_ipk.py      # 生成 netmon_1.0.0-1_all.ipk
+python3 build_ipk.py      # 生成 netmon_1.0.1-1_all.ipk
 ```
 
 `build_ipk.py` 会把 `FILES` 列表里的源文件按路由器目标路径打进 `data.tar.gz`，并写入 `control.tar.gz`（含 `postinst`：安装后自动 `chmod +x` 并重启 uhttpd）。架构标记为 `all`（纯脚本/Lua/文本，无编译二进制，适配任意 CPU）。

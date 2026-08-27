@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+NetMon 每日采集脚本
+合并 netmon-unified（设备/流量）与 netmon-apptrace.py（App 使用）输出，
+生成一份按日期命名的快照：
+  /etc/netmon-reports/netmon-YYYY-MM-DD.json   （程序可读）
+  /etc/netmon-reports/netmon-YYYY-MM-DD.md     （人类可读表格）
+仅保留最近 90 天，自动清理更早文件。
+"""
+import subprocess, json, os, datetime, glob
+
+REPORT_DIR = "/etc/netmon-reports"
+KEEP_DAYS = 90
+
+
+def run_json(cmd, timeout=30):
+    try:
+        out = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, timeout=timeout)
+        return json.loads(out)
+    except Exception:
+        return {}
+
+
+def fmt(b):
+    b = int(b or 0)
+    if b >= 1024 ** 3:
+        return "%.2f GB" % (b / 1024 ** 3)
+    if b >= 1024 ** 2:
+        return "%.2f MB" % (b / 1024 ** 2)
+    if b >= 1024:
+        return "%.1f KB" % (b / 1024)
+    return "%d B" % b
+
+
+def type_of(h, v):
+    s = ((h or "") + " " + (v or "")).lower()
+    if "iphone" in s or "ipad" in s or "apple" in s:
+        return "苹果设备"
+    if "samsung" in s or "galaxy" in s:
+        return "三星设备"
+    if "tv" in s:
+        return "电视"
+    if any(k in s for k in ["pc", "laptop", "macbook", "book", "desktop"]):
+        return "电脑"
+    if any(k in s for k in ["echo", "alexa", "xiaomi", "mi ", "camera", "cam", "home"]):
+        return "智能家居"
+    if any(k in s for k in ["router", "ap", "tplink", "huawei", "huawai"]):
+        return "网络设备"
+    return "其他"
+
+
+def main():
+    os.makedirs(REPORT_DIR, exist_ok=True)
+
+    unified = run_json("/usr/bin/netmon-unified 2>/dev/null")
+    appdata = run_json("/usr/bin/netmon-apptrace.py 2>/dev/null")
+
+    date_str = datetime.date.today().isoformat()
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    devices_src = unified.get("devices", []) or []
+    app_by_ip = {}
+    for d in appdata.get("devices", []) or []:
+        ip = d.get("ip")
+        if ip:
+            app_by_ip[ip] = d.get("apps", {}) or {}
+
+    rows = []
+    online = 0
+    for dev in sorted(devices_src, key=lambda x: (x.get("rx_bytes", 0) + x.get("tx_bytes", 0)), reverse=True):
+        ip = dev.get("ip", "")
+        apps = app_by_ip.get(ip, {})
+        active = dev.get("active_flows", 0) or 0
+        if active > 0:
+            online += 1
+        rows.append({
+            "ip": ip,
+            "mac": dev.get("mac", ""),
+            "hostname": dev.get("hostname", "") or "未知",
+            "vendor": dev.get("vendor", ""),
+            "type": type_of(dev.get("hostname", ""), dev.get("vendor", "")),
+            "random_mac": bool(dev.get("random_mac", False)),
+            "online": active > 0,
+            "rx_bytes": dev.get("rx_bytes", 0) or 0,
+            "tx_bytes": dev.get("tx_bytes", 0) or 0,
+            "active_flows": active,
+            "apps": apps,
+        })
+
+    report = {
+        "date": date_str,
+        "generated_at": ts,
+        "total_devices": len(rows),
+        "online_devices": online,
+        "total_conntrack": unified.get("total_conntrack", 0) or 0,
+        "dns_samples": appdata.get("dns_samples", 0) or 0,
+        "global_apps": appdata.get("global_apps", {}) or {},
+        "devices": rows,
+    }
+
+    json_path = os.path.join(REPORT_DIR, "netmon-%s.json" % date_str)
+    with open(json_path, "w") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+
+    # Markdown 摘要
+    L = []
+    L.append("# NetMon 每日采集报告 %s\n" % date_str)
+    L.append("- 生成时间：%s" % ts)
+    L.append("- 总设备数：%d" % len(rows))
+    L.append("- 在线设备：%d" % online)
+    L.append("- Conntrack 条目：%d" % (unified.get("total_conntrack", 0) or 0))
+    L.append("- DNS 采样：%d" % (appdata.get("dns_samples", 0) or 0))
+    L.append("\n## 设备明细\n")
+    L.append("| # | 主机名 | IP | 厂商 | 类型 | 在线 | 接收流量 | 发送流量 | 活跃连接 | App 使用 |")
+    L.append("|---|--------|----|------|------|------|----------|----------|----------|---------|")
+    for i, d in enumerate(rows, 1):
+        status = "🟢在线" if d["online"] else "⚪离线"
+        apps_str = "、".join("%s(%d)" % (k, v) for k, v in d["apps"].items()) if d["apps"] else "—"
+        L.append("| %d | %s | %s | %s | %s | %s | %s | %s | %d | %s |" % (
+            i, d["hostname"], d["ip"], d["vendor"], d["type"], status,
+            fmt(d["rx_bytes"]), fmt(d["tx_bytes"]), d["active_flows"], apps_str))
+    L.append("")
+    gapps = appdata.get("global_apps", {}) or {}
+    if gapps:
+        L.append("## 全局 App 使用排行\n")
+        L.append("| App | DNS 查询 | 涉及设备 |")
+        L.append("|-----|----------|----------|")
+        for name, st in sorted(gapps.items(), key=lambda x: x[1].get("queries", 0), reverse=True):
+            L.append("| %s | %d | %d |" % (name, st.get("queries", 0), st.get("devices", 0)))
+        L.append("")
+
+    md_path = os.path.join(REPORT_DIR, "netmon-%s.md" % date_str)
+    with open(md_path, "w") as f:
+        f.write("\n".join(L))
+
+    # 清理超过 KEEP_DAYS 天的旧文件
+    cutoff = (datetime.date.today() - datetime.timedelta(days=KEEP_DAYS)).isoformat()
+    for fp in glob.glob(os.path.join(REPORT_DIR, "netmon-*.json")) + glob.glob(os.path.join(REPORT_DIR, "netmon-*.md")):
+        base = os.path.basename(fp)
+        dpart = base[len("netmon-"):base.rfind(".")]
+        if dpart < cutoff:
+            try:
+                os.remove(fp)
+            except OSError:
+                pass
+
+    print("OK %s | devices=%d online=%d | json=%s md=%s" % (
+        date_str, len(rows), online, json_path, md_path))
+
+
+if __name__ == "__main__":
+    main()
