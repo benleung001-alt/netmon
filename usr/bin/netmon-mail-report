@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+NetMon 每日报告邮件发送
+1) 先调用 netmon-report 生成当日报告（/etc/netmon-reports/netmon-YYYY-MM-DD.md）
+2) 读取 /etc/netmon-mail.conf 中的 SMTP 配置，把报告正文通过 163 邮箱发出
+未配置 smtp_pass 时只生成报告、不发送（避免 cron 刷错）。
+"""
+import subprocess, os, datetime, smtplib, sys, configparser
+
+CONF = "/etc/netmon-mail.conf"
+REPORT_DIR = "/etc/netmon-reports"
+
+
+def load_conf():
+    if not os.path.exists(CONF):
+        return None
+    cp = configparser.ConfigParser()
+    cp.read(CONF)
+    if not cp.has_section("mail"):
+        return None
+    return cp["mail"]
+
+
+def main():
+    # 1) 先生成当日报告
+    subprocess.run(["/usr/bin/netmon-report"], check=False)
+
+    date = datetime.date.today().isoformat()
+    md = os.path.join(REPORT_DIR, "netmon-%s.md" % date)
+    if not os.path.exists(md):
+        print("报告未生成，放弃发送")
+        return 1
+
+    cfg = load_conf()
+    if not cfg or not (cfg.get("smtp_pass") or "").strip():
+        print("未配置 SMTP 授权码（/etc/netmon-mail.conf 的 smtp_pass），仅生成报告不发送")
+        return 0
+
+    user = (cfg.get("smtp_user") or "").strip() or (cfg.get("to") or "").strip()
+    to = (cfg.get("to") or user).strip()
+    host = (cfg.get("smtp_host") or "smtp.163.com").strip()
+    try:
+        port = int((cfg.get("smtp_port") or "465").strip())
+    except ValueError:
+        port = 465
+
+    subject = "NetMon 每日设备报告 %s" % date
+    with open(md, "r", encoding="utf-8") as f:
+        body = f.read()
+
+    msg = ("From: %s\r\nTo: %s\r\nSubject: %s\r\n"
+           "Content-Type: text/plain; charset=utf-8\r\n\r\n%s") % (user, to, subject, body)
+
+    try:
+        with smtplib.SMTP_SSL(host, port, timeout=25) as s:
+            s.login(user, cfg.get("smtp_pass").strip())
+            s.sendmail(user, [to], msg.encode("utf-8"))
+        print("邮件已发送至 %s" % to)
+        return 0
+    except Exception as e:
+        print("发信失败:", e)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

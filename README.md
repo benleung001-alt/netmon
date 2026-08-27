@@ -76,6 +76,27 @@ ls -1 /etc/netmon-reports/                  # 列出所有历史
 cat /etc/netmon-reports/netmon-$(date +%F).md   # 看今天这份
 ```
 
+## 每日报告自动发邮件
+
+在每日采集基础上，用 `netmon-mail-report` 把报告发到你邮箱（cron 23:30 已自动调用它，内部先生成报告再发信）。
+
+**配置** `/etc/netmon-mail.conf`（权限 600）：
+```ini
+[mail]
+smtp_host = smtp.163.com
+smtp_port = 465
+smtp_user = 你的邮箱@163.com
+smtp_pass = 你的163客户端授权码   # 注意：是「客户端授权码」，不是邮箱登录密码
+to       = 收件邮箱@163.com
+```
+
+> ⚠️ 163 邮箱必须用 **SMTP 授权码**（网页版 163 邮箱 → 设置 → POP3/SMTP/IMAP → 开启 IMAP/SMTP 并生成「客户端授权密码」），直接用登录密码会被拒绝。
+
+未填 `smtp_pass` 时脚本只生成报告、不发送（cron 不会报错刷屏）。填好授权码后手动测一次：
+```sh
+/usr/bin/netmon-mail-report        # 成功会打印「邮件已发送至 xxx@163.com」
+```
+
 ## 数据来源与判定逻辑
 
 - `/tmp/dhcp.leases`：dnsmasq 租约，字段 `到期时间戳 MAC IP 主机名 客户端ID`。主机名由设备自报，**不受随机 MAC 影响**——这是识别 iPhone/安卓最可靠的依据。

@@ -18,7 +18,7 @@ import tarfile
 import struct
 import io
 
-OUT_IPK = "netmon_1.0.1-1_all.ipk"
+OUT_IPK = "netmon_1.0.2-1_all.ipk"
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 源文件 -> 路由器目标路径（去掉开头的 /）
@@ -29,30 +29,33 @@ FILES = [
     ("usr/bin/netmon-bandwidth.py",            "usr/bin/netmon-bandwidth.py",           0o0755),
     ("usr/bin/netmon-apptrace.py",             "usr/bin/netmon-apptrace.py",            0o0755),
     ("usr/bin/netmon-report",                   "usr/bin/netmon-report",                 0o0755),
+    ("usr/bin/netmon-mail-report",              "usr/bin/netmon-mail-report",            0o0755),
+    ("etc/netmon-mail.conf",                    "etc/netmon-mail.conf",                  0o0600),
     ("usr/share/netmon/oui.txt",               "usr/share/netmon/oui.txt",              0o0644),
     ("usr/lib/lua/luci/controller/netmon.lua", "usr/lib/lua/luci/controller/netmon.lua",0o0644),
     ("usr/lib/lua/luci/view/netmon/devices.htm","usr/lib/lua/luci/view/netmon/devices.htm",0o0644),
 ]
 
 CONTROL = """Package: netmon
-Version: 1.0.1-1
+Version: 1.0.2-1
 Section: net
 Priority: optional
 Architecture: all
 Maintainer: ben <ben@local>
 Source: netmon
 Depends: luci-base, cron
-Description: DHCP device list with hostname / vendor / random-MAC detection + App tracing + daily report for OpenWrt routers (Cudy TR3000 etc.)
+Description: DHCP device list with hostname / vendor / random-MAC detection + App tracing + daily report (JSON/MD) + email delivery for OpenWrt routers (Cudy TR3000 etc.)
 """
 
 POSTINST = """#!/bin/sh
 # 安装后赋予脚本执行权限并刷新 LuCI 让菜单生效
-chmod 0755 /usr/bin/netmon-devices /usr/bin/netmon-unified /usr/bin/netmon-bandwidth.py /usr/bin/netmon-apptrace.py /usr/bin/netmon-report 2>/dev/null
+chmod 0755 /usr/bin/netmon-devices /usr/bin/netmon-unified /usr/bin/netmon-bandwidth.py /usr/bin/netmon-apptrace.py /usr/bin/netmon-report /usr/bin/netmon-mail-report 2>/dev/null
+chmod 0600 /etc/netmon-mail.conf 2>/dev/null
 /etc/init.d/uhttpd restart 2>/dev/null
-# 配置每日采集 cron（每天 23:30），仅追加一次，不覆盖用户其它任务
+# 配置每日采集+cron（每天 23:30，生成报告并邮件发送），仅追加一次，不覆盖用户其它任务
 mkdir -p /etc/netmon-reports
-if ! grep -q "netmon-report" /etc/crontabs/root 2>/dev/null; then
-  echo "30 23 * * * /usr/bin/netmon-report >> /etc/netmon-reports/cron.log 2>&1" >> /etc/crontabs/root
+if ! grep -q "netmon-mail-report" /etc/crontabs/root 2>/dev/null; then
+  echo "30 23 * * * /usr/bin/netmon-mail-report >> /etc/netmon-reports/cron.log 2>&1" >> /etc/crontabs/root
   chmod 600 /etc/crontabs/root 2>/dev/null
   /etc/init.d/cron restart 2>/dev/null
 fi
