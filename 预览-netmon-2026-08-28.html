@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+ body{margin:0;background:#eef1f6;font-family:-apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;color:#1f2329}
+ .wrap{max-width:780px;margin:0 auto;padding:24px 14px}
+ .card{background:#fff;border-radius:16px;padding:26px;box-shadow:0 4px 18px rgba(20,30,60,.08)}
+ h1{margin:0 0 4px;font-size:22px}
+ .sub{color:#8a9099;font-size:13px;margin-bottom:20px}
+ .stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:22px}
+ .stat{flex:1;min-width:120px;background:#f6f8fc;border-radius:12px;padding:14px 16px}
+ .stat .l{font-size:12px;color:#8a9099}
+ .stat .v{font-size:24px;font-weight:700;margin-top:4px}
+ .v.green{color:#16a34a}.v.blue{color:#2563eb}.v.orange{color:#ea580c}.v.red{color:#dc2626}
+ table{width:100%;border-collapse:collapse;font-size:13px}
+ th{background:#f6f8fc;color:#5b6573;font-weight:600;text-align:left;padding:10px 12px;font-size:12px}
+ td{padding:10px 12px;border-top:1px solid #eef1f5}
+ tr:hover td{background:#fafbfc}
+ .badge{display:inline-block;padding:2px 9px;border-radius:11px;font-size:11px;font-weight:600;color:#fff}
+ .on{background:#16a34a}.off{background:#9ca3af}.rand{background:#dc2626}
+ .apptag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;color:#fff;margin:1px 2px}
+ .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#52606d}
+ .traffic{font-weight:600;color:#16a34a}
+ .host{font-weight:600}
+ .sec-title{font-size:16px;font-weight:700;margin:26px 0 12px}
+ .bar-row{display:flex;align-items:center;gap:10px;margin:9px 0;font-size:13px}
+ .bar-name{width:84px;color:#3b4252}
+ .bar-track{flex:1;background:#eef1f5;border-radius:6px;height:14px;overflow:hidden}
+ .bar-fill{height:100%;border-radius:6px}
+ .bar-num{width:104px;text-align:right;color:#6b7280;font-size:12px}
+ .footer{color:#aab;font-size:11px;margin-top:22px;text-align:center}
+</style></head>
+<body><div class="wrap"><div class="card">
+ <h1>📡 NetMon 每日设备报告</h1>
+ <div class="sub">生成时间：2026-08-28 00:26:18</div>
+ <div class="stats"><div class="stat"><div class="l">总设备数</div><div class="v ">9</div></div><div class="stat"><div class="l">在线设备</div><div class="v green">6</div></div><div class="stat"><div class="l">Conntrack 条目</div><div class="v orange">892</div></div><div class="stat"><div class="l">DNS 采样</div><div class="v red">120</div></div></div>
+ <table><thead><tr><th>#</th><th>主机名</th><th>IP</th><th>厂商</th><th>类型</th><th>在线</th><th>接收</th><th>发送</th><th>连接</th><th>App 使用</th></tr></thead>
+ <tbody><tr><td>1</td><td class='host'>LAPTOP-P8BGTDLK</td><td class='mono'>192.168.6.170</td><td>—</td><td>电脑</td><td><span class="badge on">● 在线</span></td><td class='traffic'>66.0 KB</td><td class='traffic'>0 B</td><td>22</td><td><span class="apptag" style="background:#07c160">微信(19)</span></td></tr><tr><td>2</td><td class='host'>未知</td><td class='mono'>192.168.1.2</td><td>未知</td><td>其他</td><td><span class="badge on">● 在线</span></td><td class='traffic'>21.3 KB</td><td class='traffic'>0 B</td><td>412</td><td><span style="color:#bbb;font-size:12px">—</span></td></tr><tr><td>3</td><td class='host'>未知</td><td class='mono'>192.168.6.1</td><td>未知</td><td>其他</td><td><span class="badge off">离线</span></td><td class='traffic'>984 B</td><td class='traffic'>0 B</td><td>0</td><td><span style="color:#bbb;font-size:12px">—</span></td></tr><tr><td>4</td><td class='host'>未知</td><td class='mono'>192.168.6.227</td><td>私有地址(随机MAC) <span class="badge rand">随机MAC</span></td><td>其他</td><td><span class="badge on">● 在线</span></td><td class='traffic'>751 B</td><td class='traffic'>0 B</td><td>12</td><td><span style="color:#bbb;font-size:12px">—</span></td></tr><tr><td>5</td><td class='host'>K155-11</td><td class='mono'>192.168.6.110</td><td>私有地址(随机MAC) <span class="badge rand">随机MAC</span></td><td>其他</td><td><span class="badge off">离线</span></td><td class='traffic'>152 B</td><td class='traffic'>0 B</td><td>0</td><td><span style="color:#bbb;font-size:12px">—</span></td></tr><tr><td>6</td><td class='host'>Xiaomi-14-Pro</td><td class='mono'>192.168.6.128</td><td>私有地址(随机MAC) <span class="badge rand">随机MAC</span></td><td>智能家居</td><td><span class="badge on">● 在线</span></td><td class='traffic'>0 B</td><td class='traffic'>0 B</td><td>6</td><td><span style="color:#bbb;font-size:12px">—</span></td></tr><tr><td>7</td><td class='host'>CP1_BF5900700_EZVIZ</td><td class='mono'>192.168.6.135</td><td>—</td><td>其他</td><td><span class="badge on">● 在线</span></td><td class='traffic'>0 B</td><td class='traffic'>0 B</td><td>1</td><td><span style="color:#bbb;font-size:12px">—</span></td></tr><tr><td>8</td><td class='host'>iPhone</td><td class='mono'>192.168.6.230</td><td>私有地址(随机MAC) <span class="badge rand">随机MAC</span></td><td>苹果设备</td><td><span class="badge on">● 在线</span></td><td class='traffic'>0 B</td><td class='traffic'>0 B</td><td>1</td><td><span style="color:#bbb;font-size:12px">—</span></td></tr><tr><td>9</td><td class='host'>未知</td><td class='mono'>192.168.6.3</td><td>私有地址(随机MAC) <span class="badge rand">随机MAC</span></td><td>其他</td><td><span class="badge off">离线</span></td><td class='traffic'>0 B</td><td class='traffic'>0 B</td><td>0</td><td><span style="color:#bbb;font-size:12px">—</span></td></tr></tbody></table>
+ <div class="sec-title">📊 全局 App 使用排行</div><div class="bar-row"><div class="bar-name">微信</div><div class="bar-track"><div class="bar-fill" style="width:100%;background:#07c160"></div></div><div class="bar-num">19 次 · 1 设备</div></div>
+ <div class="footer">NetMon · 由路由器自动生成 · 每日 23:30 推送</div>
+</div></div></body></html>

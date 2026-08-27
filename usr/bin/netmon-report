@@ -5,13 +5,22 @@ NetMon 每日采集脚本
 合并 netmon-unified（设备/流量）与 netmon-apptrace.py（App 使用）输出，
 生成一份按日期命名的快照：
   /etc/netmon-reports/netmon-YYYY-MM-DD.json   （程序可读）
-  /etc/netmon-reports/netmon-YYYY-MM-DD.md     （人类可读表格）
+  /etc/netmon-reports/netmon-YYYY-MM-DD.md     （人类可读表格，存档）
+  /etc/netmon-reports/netmon-YYYY-MM-DD.html   （带样式，用于邮件推送）
 仅保留最近 90 天，自动清理更早文件。
 """
-import subprocess, json, os, datetime, glob
+import subprocess, json, os, datetime, glob, html
 
 REPORT_DIR = "/etc/netmon-reports"
 KEEP_DAYS = 90
+
+# App 品牌色（HTML 邮件用）
+APP_COLORS = {
+    "抖音": "#fe2c55", "小红书": "#ff2442", "微信": "#07c160",
+    "支付宝": "#1677ff", "淘宝": "#ff5000", "抖音火山版": "#ff6b00",
+    "今日头条": "#ff4500", "微博": "#e6162d", "哔哩哔哩": "#fb7299",
+    "QQ": "#12b7f5", "优酷": "#111827", "快手": "#ff4906",
+}
 
 
 def run_json(cmd, timeout=30):
@@ -48,6 +57,114 @@ def type_of(h, v):
     if any(k in s for k in ["router", "ap", "tplink", "huawei", "huawai"]):
         return "网络设备"
     return "其他"
+
+
+def esc(s):
+    return html.escape(str(s if s is not None else ""), quote=True)
+
+
+def build_html(report):
+    date_str = report.get("date", "")
+    ts = report.get("generated_at", "")
+    rows = report.get("devices", []) or []
+    total = report.get("total_devices", len(rows))
+    online = report.get("online_devices", 0)
+    ct = report.get("total_conntrack", 0)
+    dns = report.get("dns_samples", 0)
+
+    def stat_card(label, value, cls=""):
+        return ('<div class="stat"><div class="l">%s</div>'
+                '<div class="v %s">%s</div></div>') % (esc(label), cls, esc(value))
+
+    stats = "".join([
+        stat_card("总设备数", total),
+        stat_card("在线设备", online, "green"),
+        stat_card("Conntrack 条目", ct, "orange"),
+        stat_card("DNS 采样", dns, "red"),
+    ])
+
+    trs = []
+    for i, d in enumerate(rows, 1):
+        status = ('<span class="badge on">● 在线</span>' if d.get("online")
+                  else '<span class="badge off">离线</span>')
+        vendor = esc(d.get("vendor", "")) or "—"
+        if d.get("random_mac"):
+            vendor += ' <span class="badge rand">随机MAC</span>'
+        apps = d.get("apps", {}) or {}
+        if apps:
+            tags = "".join(
+                '<span class="apptag" style="background:%s">%s(%d)</span>' % (
+                    APP_COLORS.get(k, "#6b7280"), esc(k), v)
+                for k, v in apps.items())
+        else:
+            tags = '<span style="color:#bbb;font-size:12px">—</span>'
+        trs.append(
+            "<tr><td>%d</td><td class='host'>%s</td><td class='mono'>%s</td>"
+            "<td>%s</td><td>%s</td><td>%s</td>"
+            "<td class='traffic'>%s</td><td class='traffic'>%s</td>"
+            "<td>%d</td><td>%s</td></tr>" % (
+                i, esc(d.get("hostname", "")) or "未知", esc(d.get("ip", "")),
+                vendor, esc(d.get("type", "")), status,
+                fmt(d.get("rx_bytes", 0)), fmt(d.get("tx_bytes", 0)),
+                d.get("active_flows", 0), tags))
+    table = "".join(trs)
+
+    gapps = report.get("global_apps", {}) or {}
+    bars = ""
+    if gapps:
+        maxq = max((st.get("queries", 0) for st in gapps.values()), default=1) or 1
+        for name, st in sorted(gapps.items(), key=lambda x: x[1].get("queries", 0), reverse=True):
+            q = st.get("queries", 0)
+            dev = st.get("devices", 0)
+            color = APP_COLORS.get(name, "#6b7280")
+            pct = int(q / maxq * 100) if maxq else 0
+            bars += ('<div class="bar-row"><div class="bar-name">%s</div>'
+                     '<div class="bar-track"><div class="bar-fill" style="width:%d%%;background:%s"></div></div>'
+                     '<div class="bar-num">%d 次 · %d 设备</div></div>') % (
+                esc(name), pct, color, q, dev)
+    app_section = ('<div class="sec-title">📊 全局 App 使用排行</div>' + bars) if bars else ""
+
+    return """<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+ body{margin:0;background:#eef1f6;font-family:-apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;color:#1f2329}
+ .wrap{max-width:780px;margin:0 auto;padding:24px 14px}
+ .card{background:#fff;border-radius:16px;padding:26px;box-shadow:0 4px 18px rgba(20,30,60,.08)}
+ h1{margin:0 0 4px;font-size:22px}
+ .sub{color:#8a9099;font-size:13px;margin-bottom:20px}
+ .stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:22px}
+ .stat{flex:1;min-width:120px;background:#f6f8fc;border-radius:12px;padding:14px 16px}
+ .stat .l{font-size:12px;color:#8a9099}
+ .stat .v{font-size:24px;font-weight:700;margin-top:4px}
+ .v.green{color:#16a34a}.v.blue{color:#2563eb}.v.orange{color:#ea580c}.v.red{color:#dc2626}
+ table{width:100%%;border-collapse:collapse;font-size:13px}
+ th{background:#f6f8fc;color:#5b6573;font-weight:600;text-align:left;padding:10px 12px;font-size:12px}
+ td{padding:10px 12px;border-top:1px solid #eef1f5}
+ tr:hover td{background:#fafbfc}
+ .badge{display:inline-block;padding:2px 9px;border-radius:11px;font-size:11px;font-weight:600;color:#fff}
+ .on{background:#16a34a}.off{background:#9ca3af}.rand{background:#dc2626}
+ .apptag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;color:#fff;margin:1px 2px}
+ .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#52606d}
+ .traffic{font-weight:600;color:#16a34a}
+ .host{font-weight:600}
+ .sec-title{font-size:16px;font-weight:700;margin:26px 0 12px}
+ .bar-row{display:flex;align-items:center;gap:10px;margin:9px 0;font-size:13px}
+ .bar-name{width:84px;color:#3b4252}
+ .bar-track{flex:1;background:#eef1f5;border-radius:6px;height:14px;overflow:hidden}
+ .bar-fill{height:100%%;border-radius:6px}
+ .bar-num{width:104px;text-align:right;color:#6b7280;font-size:12px}
+ .footer{color:#aab;font-size:11px;margin-top:22px;text-align:center}
+</style></head>
+<body><div class="wrap"><div class="card">
+ <h1>📡 NetMon 每日设备报告</h1>
+ <div class="sub">生成时间：%s</div>
+ <div class="stats">%s</div>
+ <table><thead><tr><th>#</th><th>主机名</th><th>IP</th><th>厂商</th><th>类型</th><th>在线</th><th>接收</th><th>发送</th><th>连接</th><th>App 使用</th></tr></thead>
+ <tbody>%s</tbody></table>
+ %s
+ <div class="footer">NetMon · 由路由器自动生成 · 每日 23:30 推送</div>
+</div></div></body></html>""" % (esc(ts), stats, table, app_section)
 
 
 def main():
@@ -103,7 +220,7 @@ def main():
     with open(json_path, "w") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
 
-    # Markdown 摘要
+    # Markdown 摘要（存档用）
     L = []
     L.append("# NetMon 每日采集报告 %s\n" % date_str)
     L.append("- 生成时间：%s" % ts)
@@ -134,9 +251,16 @@ def main():
     with open(md_path, "w") as f:
         f.write("\n".join(L))
 
+    # HTML 报告（邮件推送用）
+    html_path = os.path.join(REPORT_DIR, "netmon-%s.html" % date_str)
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(build_html(report))
+
     # 清理超过 KEEP_DAYS 天的旧文件
     cutoff = (datetime.date.today() - datetime.timedelta(days=KEEP_DAYS)).isoformat()
-    for fp in glob.glob(os.path.join(REPORT_DIR, "netmon-*.json")) + glob.glob(os.path.join(REPORT_DIR, "netmon-*.md")):
+    for fp in (glob.glob(os.path.join(REPORT_DIR, "netmon-*.json"))
+               + glob.glob(os.path.join(REPORT_DIR, "netmon-*.md"))
+               + glob.glob(os.path.join(REPORT_DIR, "netmon-*.html"))):
         base = os.path.basename(fp)
         dpart = base[len("netmon-"):base.rfind(".")]
         if dpart < cutoff:
@@ -145,8 +269,8 @@ def main():
             except OSError:
                 pass
 
-    print("OK %s | devices=%d online=%d | json=%s md=%s" % (
-        date_str, len(rows), online, json_path, md_path))
+    print("OK %s | devices=%d online=%d | json=%s md=%s html=%s" % (
+        date_str, len(rows), online, json_path, md_path, html_path))
 
 
 if __name__ == "__main__":

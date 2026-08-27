@@ -11,7 +11,7 @@
 | `usr/bin/netmon-unified` | `/usr/bin/netmon-unified` | **v2 统一脚本**：合并设备清单 + conntrack 实时流量 + App 端口分类 |
 | `usr/bin/netmon-bandwidth.py` | `/usr/bin/netmon-bandwidth.py` | 带宽采样器（对 conntrack 双采样，输出实时 Kbps/Mbps） |
 | `usr/bin/netmon-apptrace.py` | `/usr/bin/netmon-apptrace.py` | **v3 App 追踪**：通过 DNS 日志识别抖音/小红书/微信等 App 使用情况 |
-| `usr/bin/netmon-report` | `/usr/bin/netmon-report` | **v5 每日采集**：合并设备+App 生成按日期快照（JSON+MD）到 `/etc/netmon-reports/`，由 cron 23:30 触发 |
+| `usr/bin/netmon-report` | `/usr/bin/netmon-report` | **每日采集**：合并设备+App 生成按日期快照（JSON+MD+HTML）到 `/etc/netmon-reports/`，由 cron 23:30 触发 |
 | `usr/share/netmon/oui.txt` | `/usr/share/netmon/oui.txt` | 精简 OUI→厂商 文本库（39984 条，1.2MB） |
 | `usr/lib/lua/luci/controller/netmon.lua` | `/usr/lib/lua/luci/controller/netmon.lua` | LuCI 菜单挂载 |
 | `usr/lib/lua/luci/view/netmon/devices.htm` | `/usr/lib/lua/luci/view/netmon/devices.htm` | LuCI 设备列表页（含流量 + App 标签） |
@@ -67,7 +67,7 @@ ROUTER_HOST=192.168.6.1 ./deploy.sh          # 自定义网关地址
 - `netmon-YYYY-MM-DD.json` —— 程序可读的完整数据（设备、流量、App 使用、全局排行）
 - `netmon-YYYY-MM-DD.md` —— 人类可读表格报告（可直接发同事 / 存档）
 
-每天一份，自动保留最近 **90 天**，更旧的自动清理。cron 任务由 `.ipk` 的 `postinst` 自动写入（或手动加一行 `30 23 * * * /usr/bin/netmon-report >> /etc/netmon-reports/cron.log 2>&1` 到 `/etc/crontabs/root` 并 `/etc/init.d/cron restart`）。
+每天一份，自动保留最近 **90 天**，更旧的自动清理。报告同时生成三种格式：`.json`（程序可读）、`.md`（存档）、`.html`（带样式，邮件推送用）。cron 任务由 `.ipk` 的 `postinst` 自动写入（或手动加一行 `30 23 * * * /usr/bin/netmon-mail-report >> /etc/netmon-reports/cron.log 2>&1` 到 `/etc/crontabs/root` 并 `/etc/init.d/cron restart`）。
 
 手动运行 / 查看历史：
 ```sh

@@ -2,11 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 NetMon 每日报告邮件发送
-1) 先调用 netmon-report 生成当日报告（/etc/netmon-reports/netmon-YYYY-MM-DD.md）
-2) 读取 /etc/netmon-mail.conf 中的 SMTP 配置，把报告正文通过 163 邮箱发出
+1) 先调用 netmon-report 生成当日报告（.json / .md / .html）
+2) 读取 /etc/netmon-mail.conf 中的 SMTP 配置，把 .html 作为正文通过 163 邮箱发出
+   兼容纯文本客户端：同时附上 .md 作为 text/plain 备选。
 未配置 smtp_pass 时只生成报告、不发送（避免 cron 刷错）。
 """
 import subprocess, os, datetime, smtplib, sys, configparser
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 CONF = "/etc/netmon-mail.conf"
 REPORT_DIR = "/etc/netmon-reports"
@@ -23,12 +26,13 @@ def load_conf():
 
 
 def main():
-    # 1) 先生成当日报告
+    # 1) 先生成当日报告（含 html）
     subprocess.run(["/usr/bin/netmon-report"], check=False)
 
     date = datetime.date.today().isoformat()
     md = os.path.join(REPORT_DIR, "netmon-%s.md" % date)
-    if not os.path.exists(md):
+    html_path = os.path.join(REPORT_DIR, "netmon-%s.html" % date)
+    if not os.path.exists(html_path):
         print("报告未生成，放弃发送")
         return 1
 
@@ -46,16 +50,25 @@ def main():
         port = 465
 
     subject = "NetMon 每日设备报告 %s" % date
-    with open(md, "r", encoding="utf-8") as f:
-        body = f.read()
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_body = f.read()
+    text_body = ""
+    if os.path.exists(md):
+        with open(md, "r", encoding="utf-8") as f:
+            text_body = f.read()
 
-    msg = ("From: %s\r\nTo: %s\r\nSubject: %s\r\n"
-           "Content-Type: text/plain; charset=utf-8\r\n\r\n%s") % (user, to, subject, body)
+    msg = MIMEMultipart("alternative")
+    msg["From"] = user
+    msg["To"] = to
+    msg["Subject"] = subject
+    if text_body:
+        msg.attach(MIMEText(text_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     try:
         with smtplib.SMTP_SSL(host, port, timeout=25) as s:
             s.login(user, cfg.get("smtp_pass").strip())
-            s.sendmail(user, [to], msg.encode("utf-8"))
+            s.sendmail(user, [to], msg.as_string())
         print("邮件已发送至 %s" % to)
         return 0
     except Exception as e:

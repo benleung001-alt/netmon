@@ -18,7 +18,7 @@ import tarfile
 import struct
 import io
 
-OUT_IPK = "netmon_1.0.2-1_all.ipk"
+OUT_IPK = "netmon_1.0.3-1_all.ipk"
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 源文件 -> 路由器目标路径（去掉开头的 /）
@@ -37,14 +37,14 @@ FILES = [
 ]
 
 CONTROL = """Package: netmon
-Version: 1.0.2-1
+Version: 1.0.3-1
 Section: net
 Priority: optional
 Architecture: all
 Maintainer: ben <ben@local>
 Source: netmon
 Depends: luci-base, cron
-Description: DHCP device list with hostname / vendor / random-MAC detection + App tracing + daily report (JSON/MD) + email delivery for OpenWrt routers (Cudy TR3000 etc.)
+Description: DHCP device list with hostname / vendor / random-MAC detection + App tracing + daily report (JSON/MD/HTML) + styled HTML email delivery for OpenWrt routers (Cudy TR3000 etc.)
 """
 
 POSTINST = """#!/bin/sh
