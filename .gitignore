@@ -1,0 +1,8 @@
+# Python
+__pycache__/
+*.pyc
+
+# Build / runtime state (router-local)
+*.ipk
+/tmp/
+netmon_state.json

@@ -1,6 +1,6 @@
 # NetMon · DHCP 设备清单模块（OpenWrt / Cudy TR3000）
 
-把路由器上的 `/tmp/dhcp.leases` + `/proc/net/nf_conntrack` + dnsmasq DNS 日志自动解析成**带主机名、厂商、随机 MAC 标记、实时流量、App 使用追踪**的设备清单。
+把路由器上的 `/tmp/dhcp.leases` + `/proc/net/nf_conntrack` + dnsmasq DNS 日志自动解析成**带主机名、厂商、随机 MAC 标记、实时速率、App 使用追踪**的设备清单，并提供 OpenWrt LuCI 网页（NetMon 设备清单）。
 
 ## 文件清单与路由器部署路径
 
@@ -48,14 +48,16 @@ ROUTER_HOST=192.168.6.1 ./deploy.sh          # 自定义网关地址
 ```
 
 **方式 B · LuCI 网页**
-登录路由器管理页 → **状态 → NetMon 设备清单**，表格含：
-- 主机名 / IP / MAC / 厂商 / 类型推断
-- **接收/发送流量**（来自 conntrack 累积字节）
+登录路由器管理页 → **状态 → NetMon 设备清单**（v5 界面），表格含：
+- 主机名 / IP / MAC / 厂商 / 类型推断（带 emoji 图标：🍎💻📱📺🏠🔧）
+- **在线状态**：在线设备置顶，绿色脉冲圆点 + 「在线」徽章；离线设备置灰
+- **实时速率 ↓/↑**：每个设备每秒接收/发送速率（KB/s、MB/s），由 `netmon-unified` 对 conntrack 做差值计算
+- **累计接收/发送流量**（来自 conntrack 累积字节）
 - **活跃连接数**（ESTABLISHED/SYN_SENT 状态）
-- **App 使用情况**（基于 DNS 查询：抖音/小红书/微信等，彩色标签）
-- 全局 App 使用排行（DNS 查询次数 + 涉及设备数）
-- 随机 MAC 红/绿徽章
-- 每 15 秒自动刷新
+- **App 使用情况**（基于 DNS 查询：抖音/小红书/微信等，彩色标签 + 查询次数）
+- 全局 App 使用排行（DNS 查询次数 + 占比条形 + 涉及设备数）
+- 随机 MAC 红色徽章（带说明：iOS/Android 私有地址，无法追溯厂商）
+- 顶部统计卡片 + 刷新倒计时进度条，每 15 秒自动刷新，响应式适配手机/电脑
 
 ## 数据来源与判定逻辑
 
@@ -64,6 +66,7 @@ ROUTER_HOST=192.168.6.1 ./deploy.sh          # 自定义网关地址
 - **随机 MAC 判定**：MAC 第二 hex 字符为 `2/3/6/7/A/B/E/F` 即 U/L 位=1（本地管理/私有地址），标记 `random_mac=true`，厂商显示「私有地址(随机MAC)」，不查 OUI。
 - **厂商查询**：真实 MAC 取前 6 位 OUI，在 `oui.txt` 中 grep 匹配（一次批量查询，几十台设备也很快）。
 - **实时流量**：读取 `/proc/net/nf_conntrack`，对每个 conntrack 条目提取 `bytes=` 字段，按源/目的 IP 聚合。本地设备作为 src 时计 RX，作为 dst 时计 TX。
+- **实时速率**：`netmon-unified` 把每次采样的总字节写入 `/tmp/netmon_state.json`，与上次采样做差值除以时间差，得出每个设备的 ↓/↑ 每秒速率（B/s、KB/s、MB/s）。
 - **活跃连接**：conntrack 状态为 `ESTABLISHED`/`SYN_SENT`/`NEW` 的连接计数。
 - **App 分类（v2）**：根据目标端口 dport 映射到应用名（443→HTTPS/QUIC、53→DNS、80→HTTP 等），未知端口显示 `Port-XXXX`。
 - **App 追踪（v3）**：启用 dnsmasq `log-queries` 后，通过 DNS 查询日志识别抖音/小红书/微信/支付宝/淘宝等 App 使用情况。匹配域名关键词（`/etc/dnsmasq.apps`），统计各设备 App 查询次数并聚合到全局排行。
@@ -80,7 +83,7 @@ ROUTER_HOST=192.168.6.1 ./deploy.sh          # 自定义网关地址
 - 随机 MAC 设备无法反查真实厂商（这是 IEEE OUI 机制决定的，非 bug）；靠主机名识别。
 - 纯静态 IP 且长期无通信的设备，ARP 表里可能查不到（`ip neigh` 只保留近期活跃项）。
 - `oui.txt` 是静态快照，如需更新可重跑 `gen_oui_txt.py`（依赖同级的 `mac-lookup/oui-db.js`）。
-- **流量统计为累积值**（conntrack bytes 字段），不是瞬时速率。如需实时 Mbps，运行 `/usr/bin/netmon-bandwidth.py N` 进行 N 秒采样差值计算。
+- **流量统计**：`netmon-unified` 同时提供「累计字节」与「实时速率 ↓/↑」（基于 `/tmp/netmon_state.json` 两次采样差值）；`netmon-bandwidth.py N` 仍可做 N 秒独立采样。
 - **App 分类基于端口**，无法识别同一端口下的不同 app（如 HTTPS/QUIC 可能对应微信、抖音、浏览器等不同应用）。
 - **App 追踪基于 DNS**，仅在有 DNS 查询时生效；设备长时间未发起 DNS 请求则无记录。请在设备上打开对应 App 以触发 DNS 查询。
 - 路由器未安装 `python3` 的设备不支持 `netmon-unified` 和 `netmon-bandwidth.py`（老版本 busybox 无 python）；此时只能用 `netmon-devices`（纯 shell + awk）。

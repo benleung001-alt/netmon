@@ -4,8 +4,24 @@
 用法：/usr/bin/netmon-unified [采样秒数]
 输出：JSON，包含 devices / bandwidth / apps 三部分
 """
-import re, sys, time, json
+import re, sys, time, json, os
 from collections import defaultdict
+
+STATE_FILE = '/tmp/netmon_state.json'
+
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_state(state):
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f)
+    except Exception:
+        pass
 
 SAMPLE_SEC = float(sys.argv[1]) if len(sys.argv) > 1 else 0.5
 
@@ -103,17 +119,33 @@ ip_data, app_data, total_ct = parse_conntrack()
 arp = read_arp()
 leases = read_leases()
 
+# 实时速率：与上次采样做差值
+prev = load_state()
+now = time.time()
+new_state = {}
+for ip, stats in ip_data.items():
+    new_state[ip] = {'t': now, 'rx': stats['rx'], 'tx': stats['tx']}
+save_state(new_state)
+
 # 合并数据
 devices = []
 for ip, stats in sorted(ip_data.items(), key=lambda x: x[1]['rx']+x[1]['tx'], reverse=True)[:30]:
     lease = leases.get(ip, {})
     mac = arp.get(ip, 'unknown')
     hostname = lease.get('hostname', '')
-    
+
     # 随机 MAC 判定
     mac_clean = mac.replace(':', '').upper()
     random_mac = len(mac_clean) >= 2 and mac_clean[1] in '2367ABEF'
-    
+
+    # 实时速率
+    rx_rate = tx_rate = 0.0
+    if ip in prev:
+        dt = now - prev[ip].get('t', now)
+        if dt > 0.05:
+            rx_rate = max(0.0, (stats['rx'] - prev[ip].get('rx', 0)) / dt)
+            tx_rate = max(0.0, (stats['tx'] - prev[ip].get('tx', 0)) / dt)
+
     devices.append({
         'ip': ip,
         'mac': mac,
@@ -123,6 +155,8 @@ for ip, stats in sorted(ip_data.items(), key=lambda x: x[1]['rx']+x[1]['tx'], re
         'rx_bytes': stats['rx'],
         'tx_bytes': stats['tx'],
         'total_bytes': stats['rx'] + stats['tx'],
+        'rx_rate': rx_rate,
+        'tx_rate': tx_rate,
         'active_flows': stats['active'],
         'total_flows': stats['flows'],
         'source': 'dhcp' if ip in leases else 'neigh',
