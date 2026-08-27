@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""netmon-unified —— 合并设备清单 + 实时流量 + App 分类
+用法：/usr/bin/netmon-unified [采样秒数]
+输出：JSON，包含 devices / bandwidth / apps 三部分
+"""
+import re, sys, time, json
+from collections import defaultdict
+
+SAMPLE_SEC = float(sys.argv[1]) if len(sys.argv) > 1 else 0.5
+
+def is_local(ip):
+    p = ip.split('.')
+    if len(p) != 4: return False
+    f, s = int(p[0]), int(p[1])
+    return f == 10 or (f == 172 and 16 <= s <= 31) or (f == 192 and s == 168)
+
+def fmt_bytes(b):
+    if b >= 1024**3: return f"{b/1024**3:.2f}GB"
+    if b >= 1024**2: return f"{b/1024**2:.2f}MB"
+    if b >= 1024: return f"{b/1024:.1f}KB"
+    return f"{b}B"
+
+def parse_conntrack():
+    """解析当前 conntrack，返回按设备聚合的流量统计"""
+    ip_data = defaultdict(lambda: {'rx': 0, 'tx': 0, 'active': 0, 'flows': 0, 'protocols': set()})
+    app_data = defaultdict(lambda: {'count': 0, 'bytes': 0})
+    port_to_app = {
+        80: 'HTTP', 443: 'HTTPS/QUIC', 53: 'DNS', 123: 'NTP',
+        22: 'SSH', 587: 'SMTP', 993: 'IMAPS', 853: 'DoT',
+        1900: 'UPnP', 5353: 'mDNS', 5060: 'SIP',
+    }
+    try:
+        with open('/proc/net/nf_conntrack') as f:
+            lines = f.readlines()
+    except Exception as e:
+        print(f"读取 conntrack 失败: {e}", file=sys.stderr)
+        lines = []
+
+    for line in lines:
+        line = line.strip()
+        src_m = re.search(r'src=([\d.]+)', line)
+        dst_m = re.search(r'dst=([\d.]+)', line)
+        dport_m = re.search(r'dport=(\d+)', line)
+        proto_m = re.search(r'\b(tcp|udp)\b', line)
+        bytes_m = re.search(r'bytes=(\d+)', line)
+        state_m = re.search(r'\b(ESTABLISHED|SYN_SENT|NEW)\b', line)
+        if not src_m or not dst_m or not bytes_m:
+            continue
+        src_ip, dst_ip = src_m.group(1), dst_m.group(1)
+        dport = int(dport_m.group(1)) if dport_m else 0
+        proto = proto_m.group(1) if proto_m else '?'
+        b = int(bytes_m.group(1))
+        active = bool(state_m)
+
+        if is_local(src_ip) and not is_local(dst_ip):
+            ip_data[src_ip]['rx'] += b
+            ip_data[src_ip]['flows'] += 1
+            ip_data[src_ip]['protocols'].add(proto)
+            if active: ip_data[src_ip]['active'] += 1
+            app_name = port_to_app.get(dport, f'Port-{dport}')
+            app_data[app_name]['count'] += 1
+            app_data[app_name]['bytes'] += b
+        elif is_local(dst_ip) and not is_local(src_ip):
+            ip_data[dst_ip]['tx'] += b
+            if active: ip_data[dst_ip]['active'] += 1
+
+    return ip_data, app_data, len(lines)
+
+def read_arp():
+    """读取 ARP 表，构建 IP→MAC 映射"""
+    arp = {}
+    try:
+        with open('/proc/net/arp') as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 4 and parts[0] != 'IP address':
+                    ip, mac = parts[0], parts[3]
+                    if mac != '00:00:00:00:00:00':
+                        arp[ip] = mac
+    except:
+        pass
+    return arp
+
+def read_leases():
+    """读取 dhcp.leases"""
+    leases = {}
+    try:
+        with open('/tmp/dhcp.leases') as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 4:
+                    mac, ip, host = parts[1], parts[2], parts[3]
+                    if host != '*':
+                        leases[ip] = {'mac': mac, 'hostname': host}
+    except:
+        pass
+    return leases
+
+# ===== 主逻辑 =====
+print("采样 conntrack...", file=sys.stderr)
+ip_data, app_data, total_ct = parse_conntrack()
+arp = read_arp()
+leases = read_leases()
+
+# 合并数据
+devices = []
+for ip, stats in sorted(ip_data.items(), key=lambda x: x[1]['rx']+x[1]['tx'], reverse=True)[:30]:
+    lease = leases.get(ip, {})
+    mac = arp.get(ip, 'unknown')
+    hostname = lease.get('hostname', '')
+    
+    # 随机 MAC 判定
+    mac_clean = mac.replace(':', '').upper()
+    random_mac = len(mac_clean) >= 2 and mac_clean[1] in '2367ABEF'
+    
+    devices.append({
+        'ip': ip,
+        'mac': mac,
+        'hostname': hostname if hostname else ('未知' if not mac else ''),
+        'vendor': '私有地址(随机MAC)' if random_mac else ('未知' if mac == 'unknown' else ''),
+        'random_mac': random_mac,
+        'rx_bytes': stats['rx'],
+        'tx_bytes': stats['tx'],
+        'total_bytes': stats['rx'] + stats['tx'],
+        'active_flows': stats['active'],
+        'total_flows': stats['flows'],
+        'source': 'dhcp' if ip in leases else 'neigh',
+    })
+
+# App 分类
+apps = []
+for name, stats in sorted(app_data.items(), key=lambda x: x[1]['bytes'], reverse=True)[:15]:
+    apps.append({
+        'name': name,
+        'count': stats['count'],
+        'bytes': stats['bytes'],
+    })
+
+output = {
+    'generated': time.time(),
+    'total_conntrack': total_ct,
+    'device_count': len(devices),
+    'devices': devices,
+    'apps': apps,
+}
+print(json.dumps(output, indent=2))

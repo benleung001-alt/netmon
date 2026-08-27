@@ -1,0 +1,287 @@
+<%#
+ NetMon 设备清单 v4 —— 实时在线 + App 追踪（抖音/小红书/微信等）
+ 数据由 netmon-unified（流量）+ netmon-apptrace.py（App 识别）合并输出。
+%>
+<%
+local util = require "luci.util"
+local jsonc = require "luci.jsonc"
+
+-- 加载流量数据
+local raw = util.exec("/usr/bin/netmon-unified 2>/dev/null") or "{}"
+local ok, data = pcall(jsonc.parse, raw)
+if not ok or type(data) ~= "table" then data = {} end
+
+-- 加载 App 追踪数据
+local raw2 = util.exec("/usr/bin/netmon-apptrace.py 2>/dev/null") or "{}"
+local ok2, appdata = pcall(jsonc.parse, raw2)
+if not ok2 or type(appdata) ~= "table" then appdata = {} end
+
+-- 按 IP 建立 App 查找表
+local app_map = {}
+for _, dev in ipairs(appdata.devices or {}) do
+    local ip = dev.ip
+    if ip then
+        app_map[ip] = dev.apps or {}
+    end
+end
+
+local global_apps = appdata.global_apps or {}
+
+-- 加载设备基本信息
+local lease_raw = util.exec("cat /tmp/dhcp.leases 2>/dev/null") or ""
+local lease_map = {}
+for line in lease_raw:gmatch("[^\n]+") do
+    local exp, mac, ip, host, cid = line:match("^%s*(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)")
+    if ip and mac then
+        lease_map[ip] = { mac = mac, hostname = (host == "*" and "" or host) }
+    end
+end
+
+-- 合并两个数据源的设备列表
+local merged = {}
+local ip_set = {}
+
+for _, dev in ipairs(data.devices or {}) do
+    local ip = dev.ip
+    ip_set[ip] = true
+    merged[ip] = setmetatable({
+        ip = ip,
+        mac = dev.mac or "",
+        hostname = dev.hostname or lease_map[ip] and lease_map[ip].hostname or "未知",
+        vendor = dev.vendor or "",
+        random_mac = dev.random_mac or false,
+        rx_bytes = dev.rx_bytes or 0,
+        tx_bytes = dev.tx_bytes or 0,
+        active_flows = dev.active_flows or 0,
+        total_flows = dev.total_flows or 0,
+        apps = {},
+        app_queries = 0,
+    }, { __index = dev })
+end
+
+for _, dev in ipairs(appdata.devices or {}) do
+    local ip = dev.ip
+    if not ip_set[ip] then
+        ip_set[ip] = true
+        local lease = lease_map[ip] or {}
+        merged[ip] = {
+            ip = ip,
+            mac = dev.mac or lease.mac or "",
+            hostname = dev.hostname or lease.hostname or "未知",
+            vendor = "",
+            random_mac = false,
+            rx_bytes = dev.rx_bytes or 0,
+            tx_bytes = dev.tx_bytes or 0,
+            active_flows = dev.active_flows or 0,
+            total_flows = dev.total_flows or 0,
+            apps = dev.apps or {},
+            app_queries = dev.app_total_bytes or 0,
+        }
+    else
+        local m = merged[ip]
+        m.apps = dev.apps or m.apps or {}
+        m.app_queries = dev.app_total_bytes or m.app_queries or 0
+    end
+end
+
+local function guess_type(h, v)
+    local s = ((h or "") .. " " .. (v or "")):lower()
+    if s:find("iphone") or s:find("ipad") or s:find("apple") then return "苹果设备"
+    elseif s:find("samsung") or s:find("galaxy") then return "三星设备"
+    elseif s:find("tv") then return "电视"
+    elseif s:find("pc") or s:find("desktop") or s:find("laptop") or s:find("macbook") or s:find("book") then return "电脑"
+    elseif s:find("echo") or s:find("alexa") or s:find("mi ") or s:find("xiaomi") or s:find("camera") or s:find("cam") or s:find("home") then return "智能家居"
+    elseif s:find("router") or s:find("ap") or s:find("tplink") or s:find("huawei") or s:find("huawai") then return "网络设备"
+    else return "其他" end
+end
+
+local function fmt_bytes(b)
+    if b >= 1024*1024*1024 then return string.format("%.2f GB", b/1024/1024/1024)
+    elseif b >= 1024*1024 then return string.format("%.2f MB", b/1024/1024)
+    elseif b >= 1024 then return string.format("%.1f KB", b/1024)
+    else return string.format("%d B", b) end
+end
+
+-- App 颜色映射
+local APP_COLORS = {
+    ['抖音']       = '#fe2c55',
+    ['小红书']     = '#ff2442',
+    ['微信']       = '#07c160',
+    ['支付宝']     = '#1677ff',
+    ['淘宝']       = '#ff5000',
+    ['抖音火山版'] = '#ff6b00',
+    ['今日头条']   = '#ff4500',
+}
+-%>
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="15">
+<title>NetMon 设备清单</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; margin: 24px; color: #222; background: #f8f9fa; }
+  h2 { margin: 0 0 4px; }
+  .sub { color: #888; font-size: 13px; margin-bottom: 16px; }
+  .stats-bar { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+  .stat-card { background: #fff; border-radius: 8px; padding: 12px 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); min-width: 120px; }
+  .stat-card .label { font-size: 12px; color: #888; }
+  .stat-card .value { font-size: 20px; font-weight: 600; color: #333; }
+  .stat-card .value.green { color: #27ae60; }
+  .stat-card .value.orange { color: #e67e22; }
+  .stat-card .value.red { color: #e74c3c; }
+  table { border-collapse: collapse; width: 100%; max-width: 1200px; font-size: 14px; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  th, td { border-bottom: 1px solid #f0f0f0; padding: 10px 12px; text-align: left; }
+  th { background: #f5f6f8; font-weight: 600; color: #555; font-size: 13px; }
+  tr:hover td { background: #fafbfc; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; color: #fff; }
+  .b-rand { background: #e74c3c; }
+  .b-real { background: #27ae60; }
+  .b-active { background: #3498db; }
+  .b-online { background: #27ae60; animation: pulse 2s infinite; }
+  .b-offline { background: #95a5a6; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  .traffic { font-weight: 600; color: #27ae60; }
+  .app-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin: 1px 2px; color: #fff; font-weight: 500; }
+  a.btn { display:inline-block; margin-top:14px; padding:6px 14px; background:#337ab7; color:#fff; border-radius:4px; text-decoration:none; font-size:13px; }
+  .empty { text-align:center; color:#999; padding: 40px; }
+  .hint { background: #fffbe6; border: 1px solid #ffe58f; border-radius: 6px; padding: 10px 16px; margin-bottom: 16px; font-size: 13px; color: #8c6e00; }
+  .online-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #27ae60; margin-right: 6px; animation: blink 1.5s infinite; }
+  @keyframes blink {
+    0%, 100% { opacity: 1; box-shadow: 0 0 4px #27ae60; }
+    50% { opacity: 0.5; box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+<h2>📡 NetMon 设备清单</h2>
+<div class="sub">数据来自 DHCP 租约 + nf_conntrack + DNS 日志 · 每 15 秒自动刷新</div>
+
+<div class="hint">
+  💡 <strong>提示：</strong>请在手机/设备上打开<b>抖音、小红书、微信</b>等 App，路由器会记录 DNS 查询并识别应用类型。
+</div>
+
+<div class="stats-bar">
+  <div class="stat-card"><div class="label">总设备数</div><div class="value"><%= #merged %></div></div>
+  <div class="stat-card"><div class="label">🟢 在线设备</div><div class="value green"><%
+local online_count = 0
+for ip, dev in pairs(merged) do
+    if (dev.active_flows or 0) > 0 then online_count = online_count + 1 end
+end
+-%><%= online_count %></div></div>
+  <div class="stat-card"><div class="label">活跃连接</div><div class="value orange"><%
+local total_active = 0
+for ip, dev in pairs(merged) do
+    total_active = total_active + (dev.active_flows or 0)
+end
+-%><%= total_active %></div></div>
+  <div class="stat-card"><div class="label">Conntrack 条目</div><div class="value"><%= data.total_conntrack or 0 %></div></div>
+  <div class="stat-card"><div class="label">DNS 采样</div><div class="value red"><%= appdata.dns_samples or 0 %></div></div>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>#</th><th>主机名</th><th>IP</th><th>MAC</th><th>厂商</th><th>类型</th><th>在线状态</th>
+      <th>接收流量</th><th>发送流量</th><th>活跃连接</th><th>App 使用情况</th>
+    </tr>
+  </thead>
+  <tbody>
+<%
+local i = 0
+for ip, dev in pairs(merged) do
+    i = i + 1
+    local mac = dev.mac or ""
+    local vendor = dev.vendor or ""
+    local rnd = dev.random_mac
+    local active = dev.active_flows or 0
+    local total_flows = dev.total_flows or 0
+    local hostname = dev.hostname or "未知"
+    local is_online = active > 0
+
+    -- App 标签
+    local apps_html = ""
+    local apps_list = dev.apps or {}
+    if next(apps_list) ~= nil then
+        local lines = {}
+        for app_name, count in pairs(apps_list) do
+            local color = APP_COLORS[app_name] or "#888"
+            table.insert(lines, string.format(
+                '<span class="app-tag" style="background:%s" title="%s: %d 次 DNS 查询">%s (%d)</span>',
+                color, app_name, count, app_name, count
+            ))
+        end
+        apps_html = table.concat(lines, "")
+    else
+        apps_html = "<span style=\"color:#bbb;font-size:12px\">未识别</span>"
+    end
+
+    -- 在线状态标注
+    local status_html
+    if is_online then
+        status_html = '<span class="b-online"><span class="online-dot"></span>在线</span>'
+    else
+        status_html = '<span class="badge b-offline">离线</span>'
+    end
+-%>
+    <tr>
+      <td><%= i %></td>
+      <td><strong><%= hostname %></strong></td>
+      <td class="mono"><%= ip %></td>
+      <td class="mono"><%= mac %></td>
+      <td><%= vendor %></td>
+      <td><%= guess_type(hostname, vendor) %></td>
+      <td><%= status_html %></td>
+      <td class="traffic"><%= fmt_bytes(dev.rx_bytes or 0) %></td>
+      <td class="traffic"><%= fmt_bytes(dev.tx_bytes or 0) %></td>
+      <td><span class="badge <%= active > 0 and 'b-active' or '' %>"><%= active %>/<%= total_flows %></span></td>
+      <td><%= apps_html %></td>
+    </tr>
+<%
+end
+if i == 0 then
+-%>
+    <tr><td colspan="11" class="empty">暂无设备（未读取到 dhcp.leases 或 conntrack 为空）</td></tr>
+<%
+end
+-%>
+  </tbody>
+</table>
+
+<!-- 全局 App 汇总 -->
+<% if next(global_apps) ~= nil then %>
+<h3 style="margin-top:24px;font-size:16px;">📊 全局 App 使用排行</h3>
+<table>
+  <thead>
+    <tr><th>App</th><th>DNS 查询次数</th><th>涉及设备数</th></tr>
+  </thead>
+  <tbody>
+<%
+    local sorted_apps = {}
+    for app_name, stats in pairs(global_apps) do
+        table.insert(sorted_apps, { name = app_name, count = stats.queries or 0, devices = stats.devices or 0 })
+    end
+    table.sort(sorted_apps, function(a, b) return a.count > b.count end)
+    for _, a in ipairs(sorted_apps) do
+        local color = APP_COLORS[a.name] or "#888"
+-%>
+    <tr>
+      <td><span class="app-tag" style="background:<%= color %>"><%= a.name %></span></td>
+      <td class="mono"><%= a.count %></td>
+      <td class="mono"><%= a.devices %></td>
+    </tr>
+<%
+    end
+-%>
+  </tbody>
+</table>
+<% end %>
+
+<a class="btn" href="?">立即刷新</a>
+</body>
+</html>

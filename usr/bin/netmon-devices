@@ -1,0 +1,73 @@
+#!/bin/sh
+# netmon-devices —— 读取 dnsmasq 租约 + ARP 邻居，输出 JSON 设备清单
+#
+# 输出字段（每个设备）：
+#   ip          局域网 IP
+#   mac          MAC 地址
+#   hostname     主机名（来自 DHCP，无则为空）
+#   vendor       厂商（OUI 查库；随机 MAC 标记为「私有地址(随机MAC)」）
+#   random_mac   是否为随机/私有 MAC（U/L 位 = 1）
+#   expiry       DHCP 租约到期时间戳（非 DHCP 设备为 0）
+#   source       dhcp | neigh
+#
+# 兼容 OpenWrt busybox ash。依赖：awk（busybox 自带）、ip（iproute2）、grep。
+#
+# 环境变量（便于 PC 端测试）：
+#   NETMON_LEASES   dhcp.leases 路径，默认 /tmp/dhcp.leases
+#   NETMON_OUI      OUI 文本库路径，默认 /usr/share/netmon/oui.txt
+#   NETMON_NEIGH    传入 "0" 可关闭 ip neigh 解析（PC 测试时无该命令）
+#   NETMON_AWK      awk 程序路径，默认本脚本同目录的 netmon-devices.awk
+
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+OUIFILE="${NETMON_OUI:-/usr/share/netmon/oui.txt}"
+LEASES="${NETMON_LEASES:-/tmp/dhcp.leases}"
+USE_NEIGH="${NETMON_NEIGH:-1}"
+AWKFILE="${NETMON_AWK:-$SCRIPT_DIR/netmon-devices.awk}"
+
+# 在脚本同目录放临时文件，避免污染系统 /tmp（也避免某些环境的删除拦截）
+TMPDIR_LOCAL="$(mktemp -d 2>/dev/null || echo "$SCRIPT_DIR/.netmon_tmp")"
+mkdir -p "$TMPDIR_LOCAL" 2>/dev/null
+TMP="$TMPDIR_LOCAL/dev.$$"
+NEED="$TMPDIR_LOCAL/need.$$"
+MATCH="$TMPDIR_LOCAL/match.$$"
+: > "$TMP"
+: > "$NEED"
+
+cleanup() { rm -rf "$TMPDIR_LOCAL" 2>/dev/null; }
+trap cleanup EXIT
+
+# ---- 1. 解析 /tmp/dhcp.leases ----
+# 字段：<到期时间戳> <mac> <ip> <hostname> <clientid>
+if [ -f "$LEASES" ]; then
+    while read -r exp mac ip host client; do
+        [ -z "$mac" ] && continue
+        [ "$host" = "*" ] && host=""
+        printf '%s|%s|%s|%s|dhcp\n' "$ip" "$mac" "$host" "$exp" >> "$TMP"
+        echo "$mac" | tr -d ':' | tr 'a-f' 'A-F' | cut -c1-6 >> "$NEED"
+    done < "$LEASES"
+fi
+
+# ---- 2. 解析 ip neigh（捕捉静态 IP / 非 DHCP 设备）----
+if [ "$USE_NEIGH" = "1" ] && command -v ip >/dev/null 2>&1; then
+    ip neigh show 2>/dev/null | while read -r ip _ iface _ mac rest; do
+        case "$ip" in
+            *:*) continue ;;   # 跳过 IPv6
+        esac
+        # 仅保留形如 aa:bb:cc:dd:ee:ff 的 MAC
+        echo "$mac" | grep -qiE '^([0-9a-f]{2}:){5}[0-9a-f]{2}$' || continue
+        printf '%s|%s|||neigh\n' "$ip" "$mac" >> "$TMP"
+    done
+fi
+
+# ---- 3. OUI 查库（仅查一次，批量匹配）----
+if [ -f "$OUIFILE" ] && [ -s "$NEED" ]; then
+    # grep -f - 从 stdin 读取待查 OUI 列表
+    grep -iF -f "$NEED" "$OUIFILE" > "$MATCH" 2>/dev/null || true
+else
+    : > "$MATCH"
+fi
+
+# ---- 4. 合并 + 输出 JSON ----
+awk -f "$AWKFILE" "$MATCH" "$TMP"

@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetMon 设备清单 · 预览</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; margin: 0; padding: 24px; color: #222; background: #f7f8fa; }
+  h2 { margin: 0 0 4px; }
+  .sub { color: #888; font-size: 13px; margin-bottom: 16px; }
+  .panel { background: #fff; border: 1px solid #e3e3e3; border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+  textarea { width: 100%; height: 140px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; padding: 10px; border: 1px solid #d6d9de; border-radius: 6px; resize: vertical; }
+  .btns { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
+  button { padding: 8px 16px; border: 0; border-radius: 6px; background: #337ab7; color: #fff; font-size: 14px; cursor: pointer; }
+  button.sec { background: #6c757d; }
+  button.ghost { background: #fff; color: #337ab7; border: 1px solid #337ab7; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; background: #fff; }
+  th, td { border: 1px solid #e3e3e3; padding: 8px 10px; text-align: left; }
+  th { background: #f5f6f8; font-weight: 600; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; color: #fff; }
+  .b-rand { background: #e74c3c; }
+  .b-real { background: #27ae60; }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  .note { font-size: 12px; color: #999; margin-top: 10px; line-height: 1.6; }
+  code { background: #eef0f3; padding: 1px 5px; border-radius: 3px; }
+  .warn { color: #c0392b; }
+</style>
+</head>
+<body>
+<h2>NetMon 设备清单 · 电脑端预览</h2>
+<div class="sub">把路由器上的 <code>/tmp/dhcp.leases</code> 内容粘进来，即可在电脑上预览带 hostname / 厂商 / 随机MAC 标记的设备清单（无需登录路由器）。</div>
+
+<div class="panel">
+  <label style="font-size:13px;color:#555;">粘贴 dhcp.leases 内容（每行：到期时间戳 MAC IP 主机名 客户端ID）：</label>
+  <textarea id="input" placeholder="1761436800 9a:21:6a:12:19:2b 192.168.1.101 iPhone *"></textarea>
+  <div class="btns">
+    <button onclick="loadSample()">加载示例</button>
+    <button class="sec" onclick="parseInput()">解析</button>
+    <button class="ghost" onclick="document.getElementById('input').value='';document.getElementById('out').innerHTML='';">清空</button>
+  </div>
+  <div class="note">
+    在路由器上取数：<code>cat /tmp/dhcp.leases</code>（SSH 登录后），或 LuCI → 网络 → DHCP 租约 页面复制。<br>
+    说明：iPhone / 安卓开启「私有地址」后 MAC 为随机值，OUI 查不到厂商，这里会标记<span class="badge b-rand">随机MAC</span>；但 <b>hostname 仍由设备自报，不受随机 MAC 影响</b>。
+  </div>
+</div>
+
+<div id="out"></div>
+
+<!-- 优先加载完整 OUI 库（与 mac-lookup 网页同源），失败则用内置精简表 -->
+<script src="../mac-lookup/oui-db.js"></script>
+<script>
+// 内置精简 OUI 回退表（仅覆盖常见消费电子厂商，保证独立打开也能识别）
+var FALLBACK_OUI = {
+  "000A27":"Apple, Inc.",
+  "0016CB":"Apple, Inc.",
+  "001D4F":"Apple, Inc.",
+  "0021E9":"Apple, Inc.",
+  "002241":"Apple, Inc.",
+  "002436":"Apple, Inc.",
+  "003EE1":"Apple, Inc.",
+  "00408F":"Apple, Inc.",
+  "00A9D1":"Apple, Inc.",
+  "00BA73":"Apple, Inc.",
+  "00D3B6":"Apple, Inc.",
+  "00E0B6":"Apple, Inc.",
+  "00E54E":"Apple, Inc.",
+  "04FE9C":"Apple, Inc.",
+  "0C2DDE":"Apple, Inc.",
+  "10F94D":"Apple, Inc.",
+  "14AB19":"Apple, Inc.",
+  "18F7B0":"Apple, Inc.",
+  "1CAB28":"Apple, Inc.",
+  "20C9D0":"Apple, Inc.",
+  "28E085":"Apple, Inc.",
+  "2C33B9":"Apple, Inc.",
+  "3C22FB":"Apple, Inc.",
+  "404FE1":"Apple, Inc.",
+  "48A96B":"Apple, Inc.",
+  "54E32D":"Apple, Inc.",
+  "58B0EC":"Apple, Inc.",
+  "68F40D":"Apple, Inc.",
+  "6CD098":"Apple, Inc.",
+  "7C04D0":"Apple, Inc.",
+  "8C8590":"Apple, Inc.",
+  "98AAB5":"Apple, Inc.",
+  "A0B3CC":"Apple, Inc.",
+  "A4C3F0":"Apple, Inc.",
+  "ACBC32":"Apple, Inc.",
+  "B8F6B1":"Apple, Inc.",
+  "C02E20":"Apple, Inc.",
+  "C84D8D":"Apple, Inc.",
+  "D43A65":"Apple, Inc.",
+  "DC2B2A":"Apple, Inc.",
+  "E07BC3":"Apple, Inc.",
+  "EC9C32":"Apple, Inc.",
+  "F0B3BC":"Apple, Inc.",
+  "F4F1FE":"Apple, Inc.",
+  "FC1F47":"Apple, Inc.",
+  "000F6B":"Samsung Electronics",
+  "001EA6":"Samsung Electronics",
+  "0020A6":"Samsung Electronics",
+  "002564":"Samsung Electronics",
+  "00307F":"Samsung Electronics",
+  "04411D":"Samsung Electronics",
+  "0C8C24":"Samsung Electronics",
+  "1047EB":"Samsung Electronics",
+  "14DAE9":"Samsung Electronics",
+  "1889DE":"Samsung Electronics",
+  "1C662B":"Samsung Electronics",
+  "20CF30":"Samsung Electronics",
+  "2470C6":"Samsung Electronics",
+  "28B7AD":"Samsung Electronics",
+  "2CAB25":"Samsung Electronics",
+  "34E253":"Samsung Electronics",
+  "3C0927":"Samsung Electronics",
+  "44F7A8":"Samsung Electronics",
+  "50389A":"Samsung Electronics",
+  "60D07A":"Samsung Electronics",
+  "64B0A6":"Samsung Electronics",
+  "70F387":"Samsung Electronics",
+  "7C4616":"Samsung Electronics",
+  "84B11E":"Samsung Electronics",
+  "8C7728":"Samsung Electronics",
+  "98B648":"Samsung Electronics",
+  "A0D3CA":"Samsung Electronics",
+  "AC5A91":"Samsung Electronics",
+  "B0934B":"Samsung Electronics",
+  "C8A5DB":"Samsung Electronics",
+  "CC3A61":"Samsung Electronics",
+  "D0914B":"Samsung Electronics",
+  "D46CAE":"Samsung Electronics",
+  "E81B46":"Samsung Electronics",
+  "EC5126":"Samsung Electronics",
+  "F49F3D":"Samsung Electronics",
+  "F8A963":"Samsung Electronics",
+  "00095B":"HUAWEI TECHNOLOGIES",
+  "0019C6":"HUAWEI TECHNOLOGIES",
+  "002184":"HUAWEI TECHNOLOGIES",
+  "00E0FC":"HUAWEI TECHNOLOGIES",
+  "0C8BFD":"HUAWEI TECHNOLOGIES",
+  "1C1B0D":"HUAWEI TECHNOLOGIES",
+  "205E7A":"HUAWEI TECHNOLOGIES",
+  "24A6F0":"HUAWEI TECHNOLOGIES",
+  "2888AE":"HUAWEI TECHNOLOGIES",
+  "30D1A7":"HUAWEI TECHNOLOGIES",
+  "340A34":"HUAWEI TECHNOLOGIES",
+  "3C13DB":"HUAWEI TECHNOLOGIES",
+  "48618A":"HUAWEI TECHNOLOGIES",
+  "4C1FCC":"HUAWEI TECHNOLOGIES",
+  "50FA06":"HUAWEI TECHNOLOGIES",
+  "54B8B0":"HUAWEI TECHNOLOGIES",
+  "58B7C6":"HUAWEI TECHNOLOGIES",
+  "5C9373":"HUAWEI TECHNOLOGIES",
+  "60FD6F":"HUAWEI TECHNOLOGIES",
+  "6829AD":"HUAWEI TECHNOLOGIES",
+  "70F11C":"HUAWEI TECHNOLOGIES",
+  "7C2EEC":"HUAWEI TECHNOLOGIES",
+  "80A334":"HUAWEI TECHNOLOGIES",
+  "8CDCD4":"HUAWEI TECHNOLOGIES",
+  "90F152":"HUAWEI TECHNOLOGIES",
+  "94D5C6":"HUAWEI TECHNOLOGIES",
+  "A062EA":"HUAWEI TECHNOLOGIES",
+  "AC74D1":"HUAWEI TECHNOLOGIES",
+  "B083FE":"HUAWEI TECHNOLOGIES",
+  "C4C6C3":"HUAWEI TECHNOLOGIES",
+  "C89CDD":"HUAWEI TECHNOLOGIES",
+  "D072DC":"HUAWEI TECHNOLOGIES",
+  "D85D4C":"HUAWEI TECHNOLOGIES",
+  "E005C5":"HUAWEI TECHNOLOGIES",
+  "EC3A8B":"HUAWEI TECHNOLOGIES",
+  "F44CBC":"HUAWEI TECHNOLOGIES",
+  "F8E71E":"HUAWEI TECHNOLOGIES",
+  "FCBF3B":"HUAWEI TECHNOLOGIES",
+  "000DFB":"Xiaomi Communications",
+  "0017C9":"Xiaomi Communications",
+  "001A9A":"Xiaomi Communications",
+  "00249B":"Xiaomi Communications",
+  "003356":"Xiaomi Communications",
+  "04421E":"Xiaomi Communications",
+  "08EA40":"Xiaomi Communications",
+  "0C9A3C":"Xiaomi Communications",
+  "148FC8":"Xiaomi Communications",
+  "18DBC0":"Xiaomi Communications",
+  "1C7E3B":"Xiaomi Communications",
+  "24C6B0":"Xiaomi Communications",
+  "2888F6":"Xiaomi Communications",
+  "2CDDD4":"Xiaomi Communications",
+  "348797":"Xiaomi Communications",
+  "3CD0F8":"Xiaomi Communications",
+  "44F39B":"Xiaomi Communications",
+  "506BBF":"Xiaomi Communications",
+  "54FA3E":"Xiaomi Communications",
+  "5898E3":"Xiaomi Communications",
+  "64B01F":"Xiaomi Communications",
+  "68FDAD":"Xiaomi Communications",
+  "70044D":"Xiaomi Communications",
+  "74CB7F":"Xiaomi Communications",
+  "78DE85":"Xiaomi Communications",
+  "7CEF2D":"Xiaomi Communications",
+  "84D7EB":"Xiaomi Communications",
+  "8CFDF1":"Xiaomi Communications",
+  "90CEE0":"Xiaomi Communications",
+  "94CCB9":"Xiaomi Communications",
+  "A044A5":"Xiaomi Communications",
+  "A44198":"Xiaomi Communications",
+  "AC5CF3":"Xiaomi Communications",
+  "B0487A":"Xiaomi Communications",
+  "C4239F":"Xiaomi Communications",
+  "C8B5B1":"Xiaomi Communications",
+  "D04519":"Xiaomi Communications",
+  "D89E39":"Xiaomi Communications",
+  "E4B095":"Xiaomi Communications",
+  "EC6FCB":"Xiaomi Communications",
+  "F044D5":"Xiaomi Communications",
+  "F8A0A8":"Xiaomi Communications",
+  "FC64B1":"Xiaomi Communications",
+  "000C43":"TP-LINK",
+  "001477":"TP-LINK",
+  "001BFC":"TP-LINK",
+  "002277":"TP-LINK",
+  "00346F":"TP-LINK",
+  "007416":"TP-LINK",
+  "00B00C":"TP-LINK",
+  "00D009":"TP-LINK",
+  "04D961":"TP-LINK",
+  "0C4B54":"TP-LINK",
+  "10FEED":"TP-LINK",
+  "14A9E3":"TP-LINK",
+  "18457C":"TP-LINK",
+  "1C3BF3":"TP-LINK",
+  "20DA74":"TP-LINK",
+  "24A5DC":"TP-LINK",
+  "28ED6A":"TP-LINK",
+  "30FC68":"TP-LINK",
+  "34E894":"TP-LINK",
+  "385345":"TP-LINK",
+  "3C0848":"TP-LINK",
+  "408D5B":"TP-LINK",
+  "44B728":"TP-LINK",
+  "4860BC":"TP-LINK",
+  "4C5402":"TP-LINK",
+  "50BD5F":"TP-LINK",
+  "5489C0":"TP-LINK",
+  "585FBF":"TP-LINK",
+  "5C636B":"TP-LINK",
+  "6013FC":"TP-LINK",
+  "64E584":"TP-LINK",
+  "687D43":"TP-LINK",
+  "6CCDB7":"TP-LINK",
+  "7083BB":"TP-LINK",
+  "74835C":"TP-LINK",
+  "78A111":"TP-LINK",
+  "7CD34D":"TP-LINK",
+  "80EA2A":"TP-LINK",
+  "84F2C1":"TP-LINK",
+  "888BE8":"TP-LINK",
+  "8C2119":"TP-LINK",
+  "904632":"TP-LINK",
+  "94D961":"TP-LINK",
+  "985FEA":"TP-LINK",
+  "9CEB45":"TP-LINK",
+  "A0F3C1":"TP-LINK",
+  "A434D9":"TP-LINK",
+  "A88BD2":"TP-LINK",
+  "AC84C6":"TP-LINK",
+  "B0486E":"TP-LINK",
+  "B0BEE4":"TP-LINK",
+  "B4B024":"TP-LINK",
+  "B867D3":"TP-LINK",
+  "BC46AB":"TP-LINK",
+  "C025E9":"TP-LINK",
+  "C46E1F":"TP-LINK",
+  "C80E14":"TP-LINK",
+  "CC08FB":"TP-LINK",
+  "CCF9E4":"TP-LINK",
+  "D009B1":"TP-LINK",
+  "D45DDF":"TP-LINK",
+  "D80F99":"TP-LINK",
+  "DC0AEB":"TP-LINK",
+  "E00B4D":"TP-LINK",
+  "E4CC2D":"TP-LINK",
+  "E8956E":"TP-LINK",
+  "EC086B":"TP-LINK",
+  "EC9B3B":"TP-LINK",
+  "F02F74":"TP-LINK",
+  "F45BDC":"TP-LINK",
+  "F81A67":"TP-LINK",
+  "FC4DD6":"TP-LINK",
+  "001D0F":"Google, Inc.",
+  "001A11":"Google, Inc.",
+  "58EB14":"Google, Inc.",
+  "60231B":"Google, Inc.",
+  "A4CF12":"Google, Inc.",
+  "F4F5E8":"Google, Inc.",
+  "00190E":"Dell Inc.",
+  "00219B":"Dell Inc.",
+  "D89EF3":"Dell Inc.",
+  "0021CF":"Hewlett Packard",
+  "3CD92B":"Hewlett Packard",
+  "F4CE46":"Hewlett Packard"
+
+};
+
+function ouiLookup(oui) {
+  if (typeof OUI_DB !== "undefined" && OUI_DB[oui]) return OUI_DB[oui];
+  if (FALLBACK_OUI[oui]) return FALLBACK_OUI[oui];
+  return null;
+}
+
+function guessType(host, vendor) {
+  var s = ((host || "") + " " + (vendor || "")).toLowerCase();
+  if (s.indexOf("iphone") >= 0 || s.indexOf("ipad") >= 0 || s.indexOf("apple") >= 0) return "苹果设备";
+  if (s.indexOf("samsung") >= 0 || s.indexOf("galaxy") >= 0) return "三星设备";
+  if (s.indexOf("tv") >= 0) return "电视";
+  if (s.indexOf("pc") >= 0 || s.indexOf("desktop") >= 0 || s.indexOf("laptop") >= 0 || s.indexOf("macbook") >= 0 || s.indexOf("book") >= 0) return "电脑";
+  if (s.indexOf("echo") >= 0 || s.indexOf("alexa") >= 0 || s.indexOf("xiaomi") >= 0 || s.indexOf("mi ") >= 0 || s.indexOf("camera") >= 0 || s.indexOf("cam") >= 0 || s.indexOf("home") >= 0) return "智能家居";
+  if (s.indexOf("router") >= 0 || s.indexOf("ap") >= 0 || s.indexOf("tplink") >= 0 || s.indexOf("huawei") >= 0 || s.indexOf("huawai") >= 0) return "网络设备";
+  return "其他";
+}
+
+function isRandomMac(mac) {
+  var oui = mac.replace(/[:\-]/g, "").toUpperCase();
+  if (oui.length < 6) return false;
+  var c2 = oui.charAt(1);
+  return ["2","3","6","7","A","B","E","F"].indexOf(c2) >= 0;
+}
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];
+  });
+}
+
+function parseInput() {
+  var text = document.getElementById("input").value.trim();
+  var lines = text.split(/\r?\n/);
+  var devices = [];
+  var seenIp = {};
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) continue;
+    var p = line.split(/\s+/);
+    if (p.length < 4) continue;
+    var exp = p[0], mac = p[1], ip = p[2], host = p[3];
+    if (host === "*") host = "";
+    if (seenIp[ip]) continue; // 简单去重（按 IP）
+    seenIp[ip] = true;
+    var oui = mac.replace(/[:\-]/g, "").toUpperCase().substr(0, 6);
+    var rnd = isRandomMac(mac);
+    var vendor = rnd ? "私有地址(随机MAC)" : (ouiLookup(oui) || "未知");
+    devices.push({ ip: ip, mac: mac, hostname: host || "未知", vendor: vendor, random_mac: rnd, type: guessType(host, vendor) });
+  }
+  render(devices);
+}
+
+function render(devices) {
+  var html = '<div class="panel"><div class="sub">共 <b>' + devices.length + '</b> 台设备（预览数据，来自粘贴的 dhcp.leases）</div>';
+  html += '<table><thead><tr><th>#</th><th>主机名</th><th>IP</th><th>MAC</th><th>厂商</th><th>类型</th><th>MAC 属性</th></tr></thead><tbody>';
+  if (devices.length === 0) {
+    html += '<tr><td colspan="7" style="text-align:center;color:#999;">没有解析到设备，请检查粘贴内容格式。</td></tr>';
+  }
+  for (var i = 0; i < devices.length; i++) {
+    var d = devices[i];
+    var cls = d.random_mac ? "b-rand" : "b-real";
+    var lbl = d.random_mac ? "随机MAC" : "真实MAC";
+    html += '<tr>'
+      + '<td>' + (i + 1) + '</td>'
+      + '<td>' + escapeHtml(d.hostname) + '</td>'
+      + '<td class="mono">' + escapeHtml(d.ip) + '</td>'
+      + '<td class="mono">' + escapeHtml(d.mac) + '</td>'
+      + '<td>' + escapeHtml(d.vendor) + '</td>'
+      + '<td>' + escapeHtml(d.type) + '</td>'
+      + '<td><span class="badge ' + cls + '">' + lbl + '</span></td>'
+      + '</tr>';
+  }
+  html += '</tbody></table>';
+  if (typeof OUI_DB === "undefined") {
+    html += '<div class="note warn">提示：未加载到完整 OUI 库（../mac-lookup/oui-db.js），当前使用内置精简表，厂商识别可能不全。把本文件与 mac-lookup 文件夹放在一起即可启用完整库。</div>';
+  }
+  html += '</div>';
+  document.getElementById("out").innerHTML = html;
+}
+
+function loadSample() {
+  var sample = [
+    "1761436800 9a:21:6a:12:19:2b 192.168.1.101 iPhone *",
+    "1761436800 3c:22:fb:11:22:33 192.168.1.102 ben-pc 01:00:00:00:00:00",
+    "1761436800 f4:f5:e8:44:55:66 192.168.1.103 Samsung-TV 00:00:00:00:00:00",
+    "1761436800 00:1a:2b:77:88:99 192.168.1.104 * 00:00:00:00:00:00",
+    "1761436800 a4:cf:12:ab:cd:ef 192.168.1.105 Chromecast 00:00:00:00:00:00"
+  ].join("\n");
+  document.getElementById("input").value = sample;
+  parseInput();
+}
+
+// 打开即加载示例
+loadSample();
+</script>
+</body>
+</html>

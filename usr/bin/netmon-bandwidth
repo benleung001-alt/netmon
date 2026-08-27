@@ -1,0 +1,144 @@
+#!/bin/sh
+# netmon-bandwidth —— 从 conntrack 采样计算设备实时带宽（bytes/sec）
+#
+# 用法：
+#   netmon-bandwidth [采样秒数]
+#   默认采样 1 秒
+#
+# 输出：JSON，包含每个本地设备的 rx_bps/tx_bps 及当前活跃连接数
+
+set -u
+
+SAMPLE="${1:-1}"
+TMPDIR_SAMPLE="/tmp/netmon_bw.$$"
+mkdir -p "$TMPDIR_SAMPLE"
+trap 'rm -rf "$TMPDIR_SAMPLE"' EXIT
+
+# 第一次采样
+python3 - "$TMPDIR_SAMPLE/s1" <<'PY'
+import re, sys
+path = sys.argv[1]
+from collections import defaultdict
+ip_bytes = defaultdict(lambda: {'rx': 0, 'tx': 0, 'active': 0})
+
+try:
+    with open('/proc/net/nf_conntrack') as f:
+        lines = f.readlines()
+except:
+    lines = []
+
+def is_local(ip):
+    p = ip.split('.')
+    if len(p) != 4: return False
+    f, s = int(p[0]), int(p[1])
+    return f == 10 or (f == 172 and 16 <= s <= 31) or (f == 192 and s == 168)
+
+for line in lines:
+    line = line.strip()
+    src_m = re.search(r'src=([\d.]+)', line)
+    dst_m = re.search(r'dst=([\d.]+)', line)
+    bytes_m = re.search(r'bytes=(\d+)', line)
+    state_m = re.search(r'\b(ESTABLISHED|SYN_SENT|NEW)\b', line)
+    if not src_m or not dst_m or not bytes_m:
+        continue
+    src_ip, dst_ip = src_m.group(1), dst_m.group(1)
+    b = int(bytes_m.group(1))
+    active = bool(state_m)
+    if is_local(src_ip) and not is_local(dst_ip):
+        ip_bytes[src_ip]['rx'] += b
+        if active:
+            ip_bytes[src_ip]['active'] += 1
+    elif is_local(dst_ip) and not is_local(src_ip):
+        ip_bytes[dst_ip]['tx'] += b
+        if active:
+            ip_bytes[dst_ip]['active'] += 1
+
+with open(path, 'w') as f:
+    for ip, s in ip_bytes.items():
+        f.write(f"{ip}\t{s['rx']}\t{s['tx']}\t{s['active']}\n")
+PY
+
+sleep "$SAMPLE"
+
+# 第二次采样并计算差值
+python3 - "$TMPDIR_SAMPLE/s1" "$TMPDIR_SAMPLE/s2" <<'PY'
+import re, sys
+from collections import defaultdict
+
+s1_path, s2_path = sys.argv[1], sys.argv[2]
+
+# 读第一次采样
+sample1 = {}
+try:
+    with open(s1_path) as f:
+        for line in f:
+            parts = line.strip().split('\t')
+            if len(parts) == 4:
+                sample1[parts[0]] = {'rx': int(parts[1]), 'tx': int(parts[2]), 'active': int(parts[3])}
+except:
+    pass
+
+# 第二次采样（和上面相同逻辑）
+ip_bytes = defaultdict(lambda: {'rx': 0, 'tx': 0, 'active': 0})
+try:
+    with open('/proc/net/nf_conntrack') as f:
+        lines = f.readlines()
+except:
+    lines = []
+
+def is_local(ip):
+    p = ip.split('.')
+    if len(p) != 4: return False
+    f, s = int(p[0]), int(p[1])
+    return f == 10 or (f == 172 and 16 <= s <= 31) or (f == 192 and s == 168)
+
+for line in lines:
+    line = line.strip()
+    src_m = re.search(r'src=([\d.]+)', line)
+    dst_m = re.search(r'dst=([\d.]+)', line)
+    bytes_m = re.search(r'bytes=(\d+)', line)
+    state_m = re.search(r'\b(ESTABLISHED|SYN_SENT|NEW)\b', line)
+    if not src_m or not dst_m or not bytes_m:
+        continue
+    src_ip, dst_ip = src_m.group(1), dst_m.group(1)
+    b = int(bytes_m.group(1))
+    active = bool(state_m)
+    if is_local(src_ip) and not is_local(dst_ip):
+        ip_bytes[src_ip]['rx'] += b
+        if active: ip_bytes[src_ip]['active'] += 1
+    elif is_local(dst_ip) and not is_local(src_ip):
+        ip_bytes[dst_ip]['tx'] += b
+        if active: ip_bytes[dst_ip]['active'] += 1
+
+# 计算差值，输出 JSON
+sample2 = {}
+for ip, s in ip_bytes.items():
+    sample2[ip] = s
+
+# 输出
+import json
+result = []
+for ip in set(list(sample1.keys()) + list(sample2.keys())):
+    rx1 = sample1.get(ip, {'rx': 0})['rx']
+    tx1 = sample1.get(ip, {'tx': 0})['tx']
+    act1 = sample1.get(ip, {'active': 0})['active']
+    rx2 = sample2.get(ip, {'rx': 0})['rx']
+    tx2 = sample2.get(ip, {'tx': 0})['tx']
+    act2 = sample2.get(ip, {'active': 0})['active']
+    
+    rx_delta = max(0, rx2 - rx1)
+    tx_delta = max(0, tx2 - tx1)
+    rx_bps = rx_delta * 8 / float(sys.argv[2])  # 注意：需要传采样时间
+    tx_bps = tx_delta * 8 / float(sys.argv[2])
+    
+    result.append({
+        'ip': ip,
+        'rx_bps': rx_bps,
+        'tx_bps': tx_bps,
+        'total_bps': rx_bps + tx_bps,
+        'active_flows': act2,
+    })
+
+result.sort(key=lambda x: x['total_bps'], reverse=True)
+print(json.dumps({'generated': __import__('time').time(), 'sample_sec': float(sys.argv[2]), 'devices': result}))
+PY "$SAMPLE"
