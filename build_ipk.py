@@ -38,7 +38,7 @@ FILES = [
 ]
 
 CONTROL = """Package: netmon
-Version: 1.0.6-1
+Version: 1.0.8-1
 Section: net
 Priority: optional
 Architecture: all
