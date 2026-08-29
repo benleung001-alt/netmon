@@ -60,8 +60,11 @@ end
 -- 格式化速率
 local function fmt_rate(bps)
     bps = tonumber(bps) or 0
-    if bps >= 1024 then return string.format("%.1fKB/s", bps/1024)
-    else return string.format("%dB/s", math.floor(bps)) end
+    if bps >= 1024 then
+        return string.format("%.1f", bps/1024) .. "KB/s"
+    else
+        return tostring(math.floor(bps)) .. "B/s"
+    end
 end
 -%>
 <!DOCTYPE html>
