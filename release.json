@@ -1,0 +1,5 @@
+{
+    "tag_name": "v1.0.13",
+    "name": "NetMon v1.0.13 - 彻底修复类型错误",
+    "body": "### 修复\n完全重写 fmt_rate 函数，避免使用 %d 格式符\n\n- 旧方案: string.format(\"%dB/s\", math.floor(bps)) - 仍有类型问题\n- 新方案: tostring(math.floor(bps)) .. \"B/s\" - 完全避免 %d\n\n### 修改内容\n- fmt_rate 函数: 使用字符串拼接代替 string.format 处理整数\n- fmt 函数: 保留 math.floor 转换\n- App 标签: 保留 math.floor 转换\n\n下载地址: https://github.com/benleung001-alt/netmon/releases/tag/v1.0.13"
+}
