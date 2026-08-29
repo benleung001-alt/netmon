@@ -203,7 +203,7 @@ for i, dev in ipairs(devices) do
         for j, aname in ipairs(app_keys) do
             local ac = apps[aname] or 0
             local col = APP_COLORS[aname] or "#6b7280"
-            apps_h = apps_h .. string.format('<span class="app-tag" style="background:%s" title="%s: %d次">%s(%d)</span> ', col, aname, ac, esc(aname), ac)
+            apps_h = apps_h .. string.format('<span class="app-tag" style="background:%s" title="%s: %d次">%s(%d)</span> ', col, aname, math.floor(ac + 0.5), esc(aname), math.floor(ac + 0.5))
         end
     else
         apps_h = '<span class="no-app">—</span>'
