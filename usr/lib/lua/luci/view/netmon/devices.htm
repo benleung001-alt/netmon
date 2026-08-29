@@ -1,7 +1,7 @@
 <%#
- NetMon 设备清单 v5 —— 实时在线 + 实时速率 + App 追踪
- 数据由 netmon-unified（流量/速率）+ netmon-apptrace.py（App 识别）合并输出。
-%>
+ NetMon 设备监控 v6 —— 搜索/排序/列切换 + App 追踪
+ 数据来源：netmon-unified（已内置 App 合并）
+-%>
 <%
 local util = require "luci.util"
 local jsonc = require "luci.jsonc"
@@ -10,113 +10,58 @@ local raw = util.exec("/usr/bin/netmon-unified 2>/dev/null") or "{}"
 local ok, data = pcall(jsonc.parse, raw)
 if not ok or type(data) ~= "table" then data = {} end
 
-local raw2 = util.exec("/usr/bin/netmon-apptrace.py 2>/dev/null") or "{}"
-local ok2, appdata = pcall(jsonc.parse, raw2)
-if not ok2 or type(appdata) ~= "table" then appdata = {} end
+local devices = data.devices or {}
+local total_ct = data.total_conntrack or 0
+local generated = data.generated or 0
 
-local lease_raw = util.exec("cat /tmp/dhcp.leases 2>/dev/null") or ""
-local lease_map = {}
-for line in lease_raw:gmatch("[^\n]+") do
-    local exp, mac, ip, host, cid = line:match("^%s*(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)")
-    if ip and mac then
-        lease_map[ip] = { mac = mac, hostname = (host == "*" and "" or host) }
-    end
-end
-
-local merged = {}
-local ip_set = {}
-for _, dev in ipairs(data.devices or {}) do
-    local ip = dev.ip
-    ip_set[ip] = true
-    merged[ip] = setmetatable({
-        ip = ip,
-        mac = dev.mac or "",
-        hostname = dev.hostname or lease_map[ip] and lease_map[ip].hostname or "未知",
-        vendor = dev.vendor or "",
-        random_mac = dev.random_mac or false,
-        rx_bytes = dev.rx_bytes or 0,
-        tx_bytes = dev.tx_bytes or 0,
-        rx_rate = dev.rx_rate or 0,
-        tx_rate = dev.tx_rate or 0,
-        active_flows = dev.active_flows or 0,
-        total_flows = dev.total_flows or 0,
-        apps = {},
-    }, { __index = dev })
-end
-for _, dev in ipairs(appdata.devices or {}) do
-    local ip = dev.ip
-    if not ip_set[ip] then
-        ip_set[ip] = true
-        local lease = lease_map[ip] or {}
-        merged[ip] = {
-            ip = ip,
-            mac = dev.mac or lease.mac or "",
-            hostname = dev.hostname or lease.hostname or "未知",
-            vendor = "",
-            random_mac = false,
-            rx_bytes = dev.rx_bytes or 0,
-            tx_bytes = dev.tx_bytes or 0,
-            rx_rate = 0, tx_rate = 0,
-            active_flows = dev.active_flows or 0,
-            total_flows = dev.total_flows or 0,
-            apps = dev.apps or {},
-        }
-    else
-        merged[ip].apps = dev.apps or merged[ip].apps or {}
-    end
-end
-
-local function guess_type(h, v)
-    local s = ((h or "") .. " " .. (v or "")):lower()
-    if s:find("iphone") or s:find("ipad") or s:find("apple") or s:find("macbook") then return "苹果设备", "🍎"
-    elseif s:find("samsung") or s:find("galaxy") then return "三星设备", "📱"
-    elseif s:find("tv") or s:find("box") then return "电视/盒子", "📺"
-    elseif s:find("pc") or s:find("desktop") or s:find("laptop") or s:find("book") then return "电脑", "💻"
-    elseif s:find("echo") or s:find("alexa") or s:find("mi ") or s:find("xiaomi") or s:find("camera") or s:find("cam") or s:find("home") or s:find("speaker") then return "智能家居", "🏠"
-    elseif s:find("router") or s:find("ap") or s:find("tplink") or s:find("huawei") or s:find("huawai") or s:find("cudy") then return "网络设备", "🔧"
-    else return "其他设备", "❓" end
-end
-
-local function fmt_bytes(b)
-    if b >= 1024*1024*1024 then return string.format("%.2f GB", b/1024/1024/1024)
-    elseif b >= 1024*1024 then return string.format("%.2f MB", b/1024/1024)
-    elseif b >= 1024 then return string.format("%.1f KB", b/1024)
-    else return string.format("%d B", b) end
-end
-
-local function fmt_rate(bps)
-    bps = bps or 0
-    if bps >= 1024*1024 then return string.format("%.2f MB/s", bps/1024/1024)
-    elseif bps >= 1024 then return string.format("%.1f KB/s", bps/1024)
-    elseif bps > 1 then return string.format("%d B/s", bps)
-    else return "—" end
-end
-
-local APP_COLORS = {
-    ['抖音']='#fe2c55', ['小红书']='#ff2442', ['微信']='#07c160', ['支付宝']='#1677ff',
-    ['淘宝']='#ff5000', ['抖音火山版']='#ff6b00', ['今日头条']='#ff4500', ['哔哩哔哩']='#fb7299',
-}
-
--- 排序：在线优先，再按总流量降序
-local dev_list = {}
-for _, dev in pairs(merged) do table.insert(dev_list, dev) end
-table.sort(dev_list, function(a, b)
-    local ao = (a.active_flows or 0) > 0 and 1 or 0
-    local bo = (b.active_flows or 0) > 0 and 1 or 0
-    if ao ~= bo then return ao > bo end
-    return (a.rx_bytes + a.tx_bytes) > (b.rx_bytes + b.tx_bytes)
-end)
-
-local online_count, total_active = 0, 0
-for _, dev in ipairs(dev_list) do
-    if (dev.active_flows or 0) > 0 then online_count = online_count + 1 end
+-- 计算统计值
+local total_devices = #devices
+local online_devices = 0
+local total_active = 0
+for _, dev in ipairs(devices) do
+    if (dev.active_flows or 0) > 0 then online_devices = online_devices + 1 end
     total_active = total_active + (dev.active_flows or 0)
 end
 
-local global_apps = appdata.global_apps or {}
-local max_app_q = 0
-for _, s in pairs(global_apps) do
-    if (s.queries or 0) > max_app_q then max_app_q = s.queries end
+-- App 品牌色
+local APP_COLORS = {
+    ['微信'] = '#07c160', ['QQ'] = '#12b7f5', ['微博'] = '#e6162d',
+    ['抖音'] = '#fe2c55', ['快手'] = '#ff4906', ['哔哩哔哩'] = '#fb7299',
+    ['小红书'] = '#ff2442', ['美团'] = '#ffc300', ['淘宝'] = '#ff5000',
+    ['支付宝'] = '#1677ff', ['京东'] = '#e1251b', ['拼多多'] = '#e02e24',
+    ['WPS'] = '#c41d2e', ['优酷'] = '#fffbe3', ['爱奇艺'] = '#00aeec',
+    ['腾讯视频'] = '#00aeec', ['今日头条'] = '#ff4500', ['抖音火山版'] = '#ff6b00',
+    ['苹果'] = '#555555', ['Google'] = '#4285f4', ['钉钉'] = '#3089ff',
+    ['飞书'] = '#3370ff', ['迅雷'] = '#ff6600', ['夸克'] = '#0066ff',
+    ['微软'] = '#00a4ef', ['腾讯文档'] = '#12b7f5', ['Synology'] = '#ff6600',
+}
+
+-- 类型推断
+local function guess_type(h, v)
+    local s = ((h or "") .. " " .. (v or "")):lower()
+    if s:find("iphone") or s:find("ipad") or s:find("apple") then return "苹果"
+    elseif s:find("samsung") or s:find("galaxy") then return "三星"
+    elseif s:find("tv") then return "电视"
+    elseif s:find("pc") or s:find("laptop") or s:find("macbook") or s:find("desktop") then return "电脑"
+    elseif s:find("echo") or s:find("alexa") or s:find("xiaomi") or s:find("mi ") or s:find("camera") then return "智能"
+    elseif s:find("router") or s:find("tplink") or s:find("huawei") then return "网络"
+    else return "其他" end
+end
+
+-- 格式化字节
+local function fmt(b)
+    b = tonumber(b) or 0
+    if b >= 1073741824 then return string.format("%.2fGB", b/1073741824)
+    elseif b >= 1048576 then return string.format("%.2fMB", b/1048576)
+    elseif b >= 1024 then return string.format("%.1fKB", b/1024)
+    else return string.format("%dB", b) end
+end
+
+-- 格式化速率
+local function fmt_rate(bps)
+    bps = tonumber(bps) or 0
+    if bps >= 1024 then return string.format("%.1fKB/s", bps/1024)
+    else return string.format("%dB/s", bps) end
 end
 -%>
 <!DOCTYPE html>
@@ -124,192 +69,268 @@ end
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="15">
-<title>NetMon 设备清单</title>
+<meta http-equiv="refresh" content="10">
+<title>NetMon 设备监控</title>
 <style>
-  :root{
-    --bg:#f4f6f9; --card:#fff; --ink:#1f2733; --muted:#8a94a6; --line:#eef1f5;
-    --green:#16a34a; --blue:#2563eb; --orange:#ea580c; --red:#dc2626; --purple:#7c3aed;
-  }
-  *{box-sizing:border-box}
-  body{font-family:-apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;margin:0;background:var(--bg);color:var(--ink);padding:22px}
-  .wrap{max-width:1240px;margin:0 auto}
-  h2{margin:0;font-size:22px;display:flex;align-items:center;gap:8px}
-  .sub{color:var(--muted);font-size:13px;margin:4px 0 16px}
-  .stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
-  .sc{background:var(--card);border-radius:12px;padding:12px 18px;flex:1;min-width:130px;box-shadow:0 1px 3px rgba(16,24,40,.06)}
-  .sc .l{font-size:12px;color:var(--muted)}
-  .sc .v{font-size:22px;font-weight:700;margin-top:2px}
-  .sc .v.g{color:var(--green)} .sc .v.o{color:var(--orange)} .sc .v.r{color:var(--red)} .sc .v.b{color:var(--blue)}
-  .hint{background:#fffbeb;border:1px solid #fde68a;color:#92660a;border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px}
-  .refresh{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);margin-bottom:10px}
-  .bar{height:5px;width:160px;background:var(--line);border-radius:3px;overflow:hidden}
-  .bar>i{display:block;height:100%;background:var(--blue);width:100%;transition:width 1s linear}
-  .tablebox{background:var(--card);border-radius:12px;box-shadow:0 1px 3px rgba(16,24,40,.06);overflow:auto}
-  table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:920px}
-  thead th{position:sticky;top:0;background:#f8fafc;color:#64748b;font-weight:600;font-size:12.5px;text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
-  tbody td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
-  tbody tr:hover{background:#f9fbfd}
-  tbody tr.off{opacity:.62}
-  .host{font-weight:600}
-  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:#475569}
-  .type{font-size:12px;color:var(--muted)}
-  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px;animation:blink 1.4s infinite}
-  @keyframes blink{0%,100%{opacity:1;box-shadow:0 0 5px var(--green)}50%{opacity:.4;box-shadow:none}}
-  .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;color:#fff;white-space:nowrap}
-  .b-on{background:var(--green)} .b-off{background:#94a3b8}
-  .b-rand{background:var(--red)} .b-act{background:var(--blue)}
-  .speed{font-size:12px;line-height:1.5}
-  .speed .d{color:var(--green);font-weight:600} .speed .u{color:var(--blue);font-weight:600}
-  .traffic{color:#475569}
-  .apps span{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;color:#fff;margin:2px 3px 2px 0;font-weight:500}
-  .apps .na{color:#b6bfca;background:#f1f4f8;font-weight:400}
-  .rank td:first-child{font-weight:600}
-  .rank .rb{height:8px;background:var(--line);border-radius:5px;overflow:hidden;min-width:120px}
-  .rank .rb>i{display:block;height:100%;border-radius:5px}
-  a.btn{display:inline-block;margin-top:16px;padding:8px 16px;background:var(--blue);color:#fff;border-radius:8px;text-decoration:none;font-size:13px}
-  .empty{text-align:center;color:var(--muted);padding:40px}
-  h3{font-size:15px;margin:26px 0 10px}
-  @media(max-width:640px){ body{padding:12px} .sc{min-width:calc(50% - 6px)} }
+:root { --bg:#f4f6fb; --card:#fff; --text:#1a1d26; --muted:#8a9099; --border:#e8ecf2;
+        --primary:#3b82f6; --success:#22c55e; --warning:#f59e0b; --danger:#ef4444;
+        --shadow:0 2px 10px rgba(0,0,0,.06); }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:-apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); font-size:14px; }
+.wrap { max-width:1280px; margin:0 auto; padding:20px 16px; }
+.header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
+.header h1 { font-size:20px; font-weight:700; }
+.sub { font-size:12px; color:var(--muted); }
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; margin-bottom:16px; }
+.card { background:var(--card); border-radius:12px; padding:14px 16px; box-shadow:var(--shadow); }
+.card .label { font-size:12px; color:var(--muted); }
+.card .value { font-size:22px; font-weight:700; margin-top:4px; }
+.card .value.green { color:var(--success); }
+.card .value.blue { color:var(--primary); }
+.card .value.orange { color:var(--warning); }
+.toolbar { display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap; align-items:center; }
+.search { flex:1; min-width:180px; padding:8px 14px; border:1px solid var(--border); border-radius:8px; font-size:13px; outline:none; }
+.search:focus { border-color:var(--primary); }
+.btn-group { display:flex; gap:4px; }
+.btn { padding:6px 14px; border:1px solid var(--border); border-radius:8px; background:var(--card); font-size:12px; cursor:pointer; color:var(--text); }
+.btn:hover { background:#f0f4ff; }
+.btn.active { background:var(--primary); color:#fff; border-color:var(--primary); }
+.count { font-size:12px; color:var(--muted); margin-left:auto; }
+.table-wrap { background:var(--card); border-radius:12px; box-shadow:var(--shadow); overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:13px; min-width:900px; }
+thead { background:#f8fafc; }
+th { padding:11px 12px; text-align:left; font-weight:600; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.03em; border-bottom:1px solid var(--border); white-space:nowrap; cursor:pointer; user-select:none; }
+th:hover { color:var(--primary); }
+td { padding:10px 12px; border-bottom:1px solid #f4f6fb; vertical-align:middle; }
+tr:last-child td { border-bottom:none; }
+tr:hover td { background:#fafbff; }
+.mono { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; color:#5b6573; }
+.host { font-weight:600; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; }
+.badge.on { background:#dcfce7; color:#16a34a; }
+.badge.off { background:#f3f4f6; color:#9ca3af; }
+.badge.rand { background:#fee2e2; color:#dc2626; }
+.badge.type { background:#eff6ff; color:#2563eb; }
+.traffic { font-weight:600; color:#16a34a; }
+.rate { font-size:11px; color:var(--muted); }
+.app-tag { display:inline-block; padding:2px 7px; border-radius:5px; font-size:11px; color:#fff; margin:1px 2px; font-weight:500; }
+.no-app { color:var(--muted); font-size:12px; }
+.refresh-bar { height:3px; background:var(--primary); width:0; border-radius:2px; animation:countdown 10s linear forwards; }
+@keyframes countdown { from{width:100%} to{width:0%} }
+@media (max-width:768px) { .table-wrap { overflow-x:auto; } }
 </style>
 </head>
 <body>
 <div class="wrap">
-<h2>📡 NetMon 设备清单</h2>
-<div class="sub">数据源：DHCP 租约 · nf_conntrack 实时流量 · DNS 日志 App 识别 · 每 15 秒自动刷新</div>
+  <div class="header">
+    <div>
+      <h1>📡 NetMon 设备监控</h1>
+      <div class="sub">实时在线 · 流量监控 · App 使用追踪 · 每 10 秒自动刷新</div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:12px;color:var(--muted)">刷新倒计时</div>
+      <div style="font-size:13px;font-weight:600;color:var(--primary)" id="countdown">10s</div>
+    </div>
+  </div>
 
-<div class="hint">💡 在手机/电脑上打开 <b>抖音、小红书、微信</b> 等 App，路由器会记录其 DNS 查询并自动识别应用与所属设备。</div>
+  <div class="stats">
+    <div class="card"><div class="label">总设备</div><div class="value"><%= total_devices %></div></div>
+    <div class="card"><div class="label">🟢 在线</div><div class="value green"><%= online_devices %></div></div>
+    <div class="card"><div class="label">活跃连接</div><div class="value orange"><%= total_active %></div></div>
+    <div class="card"><div class="label">Conntrack</div><div class="value blue"><%= total_ct %></div></div>
+  </div>
 
-<div class="stats">
-  <div class="sc"><div class="l">总设备</div><div class="v"><%= #dev_list %></div></div>
-  <div class="sc"><div class="l">🟢 在线</div><div class="v g"><%= online_count %></div></div>
-  <div class="sc"><div class="l">活跃连接</div><div class="v o"><%= total_active %></div></div>
-  <div class="sc"><div class="l">Conntrack</div><div class="v"><%= data.total_conntrack or 0 %></div></div>
-  <div class="sc"><div class="l">DNS 采样</div><div class="v r"><%= appdata.dns_samples or 0 %></div></div>
-</div>
+  <div class="toolbar">
+    <input class="search" id="search" type="text" placeholder="🔍 搜索主机名 / IP / MAC …">
+    <div class="btn-group">
+      <button class="btn active" onclick="toggleCol('type')">类型</button>
+      <button class="btn active" onclick="toggleCol('rate')">速率</button>
+      <button class="btn active" onclick="toggleCol('app')">App</button>
+    </div>
+    <span class="count" id="row-count"></span>
+  </div>
+  <div class="refresh-bar" id="refresh-bar"></div>
 
-<div class="refresh">
-  <span>下次刷新</span>
-  <div class="bar"><i id="rb"></i></div>
-  <span id="cd">15</span> 秒
-</div>
-
-<div class="tablebox">
-<table>
-  <thead><tr>
-    <th>#</th><th>主机名</th><th>IP</th><th>MAC</th><th>厂商</th><th>类型</th><th>状态</th>
-    <th>实时速率 ↓/↑</th><th>累计接收</th><th>累计发送</th><th>连接</th><th>App 使用</th>
-  </tr></thead>
-  <tbody>
+  <div class="table-wrap">
+    <table id="device-table">
+      <thead>
+        <tr>
+          <th onclick="sortTable('hostname')">主机名 <span>↕</span></th>
+          <th onclick="sortTable('ip')">IP <span>↕</span></th>
+          <th onclick="sortTable('mac')">MAC <span>↕</span></th>
+          <th>厂商</th>
+          <th class="col-type">类型</th>
+          <th onclick="sortTable('online')">在线</th>
+          <th onclick="sortTable('rx_bytes')">接收</th>
+          <th onclick="sortTable('tx_bytes')">发送</th>
+          <th class="col-rate">速率</th>
+          <th>连接</th>
+          <th class="col-app">App</th>
+        </tr>
+      </thead>
+      <tbody id="table-body">
 <%
-local i = 0
-for _, dev in ipairs(dev_list) do
-    i = i + 1
+local function esc(s)
+    return tostring(s or ""):gsub("&","&amp;"):gsub("<","&lt;"):gsub(">","&gt;")
+end
+
+for i, dev in ipairs(devices) do
+    local ip = dev.ip or ""
     local mac = dev.mac or ""
-    local vendor = dev.vendor or ""
-    local active = dev.active_flows or 0
-    local total = dev.total_flows or 0
     local hostname = dev.hostname or "未知"
+    local vendor = dev.vendor or ""
+    local rmac = dev.random_mac or false
+    local rx = dev.rx_bytes or 0
+    local tx = dev.tx_bytes or 0
+    local rxr = dev.rx_rate or 0
+    local txr = dev.tx_rate or 0
+    local active = dev.active_flows or 0
+    local total_f = dev.total_flows or 0
+    local apps = dev.apps or {}
     local is_online = active > 0
-    local cat, icon = guess_type(hostname, vendor)
-
-    local apps_html = ""
-    local apps_list = dev.apps or {}
-    if next(apps_list) ~= nil then
-        local lines = {}
-        for name, cnt in pairs(apps_list) do
-            local c = APP_COLORS[name] or "#94a3b8"
-            table.insert(lines, string.format('<span style="background:%s" title="%s：%d 次 DNS 查询">%s · %d</span>', c, name, cnt, name, cnt))
+    local stype = guess_type(hostname, vendor)
+    
+    -- 厂商显示
+    local vendor_h = esc(vendor) or "—"
+    if rmac then vendor_h = vendor_h .. ' <span class="badge rand">随机MAC</span>' end
+    
+    -- App 标签
+    local apps_h = ""
+    local app_keys = {}
+    for k in pairs(apps) do table.insert(app_keys, k) end
+    table.sort(app_keys, function(a,b) return (apps[a] or 0) > (apps[b] or 0) end)
+    if #app_keys > 0 then
+        for j, aname in ipairs(app_keys) do
+            local ac = apps[aname] or 0
+            local col = APP_COLORS[aname] or "#6b7280"
+            apps_h = apps_h .. string.format('<span class="app-tag" style="background:%s" title="%s: %d次">%s(%d)</span> ', col, aname, ac, esc(aname), ac)
         end
-        apps_html = table.concat(lines, "")
     else
-        apps_html = '<span class="na">未识别</span>'
+        apps_h = '<span class="no-app">—</span>'
     end
-
-    local vendor_html
-    if dev.random_mac then
-        vendor_html = '<span class="badge b-rand" title="iOS/Android 的 WiFi 私有地址（随机MAC），无法追溯真实厂商">随机MAC</span>'
-    elseif vendor and vendor ~= "" then
-        vendor_html = vendor
-    else
-        vendor_html = "—"
-    end
-
-    local status_html = is_online
-        and '<span class="badge b-on"><span class="dot"></span>在线</span>'
-        or '<span class="badge b-off">离线</span>'
-
-    local speed_html = is_online
-        and string.format('<span class="d">↓ %s</span><br><span class="u">↑ %s</span>', fmt_rate(dev.rx_rate), fmt_rate(dev.tx_rate))
-        or '<span style="color:#b6bfca">—</span>'
--%>
-    <tr class="<%= is_online and '' or 'off' %>">
-      <td><%= i %></td>
-      <td class="host"><%= hostname %></td>
-      <td class="mono"><%= dev.ip %></td>
-      <td class="mono"><%= mac %></td>
-      <td><%= vendor_html %></td>
-      <td class="type"><%= icon %> <%= cat %></td>
-      <td><%= status_html %></td>
-      <td class="speed"><%= speed_html %></td>
-      <td class="traffic"><%= fmt_bytes(dev.rx_bytes or 0) %></td>
-      <td class="traffic"><%= fmt_bytes(dev.tx_bytes or 0) %></td>
-      <td><span class="badge <%= active>0 and 'b-act' or '' %>"><%= active %>/<%= total %></span></td>
-      <td class="apps"><%= apps_html %></td>
-    </tr>
+    
+    local status_h = is_online 
+        and '<span class="badge on">● 在线</span>'
+        or '<span class="badge off">离线</span>'
+%>
+        <tr data-host="<%= esc(hostname) %>" data-ip="<%= esc(ip) %>" data-mac="<%= esc(mac) %>">
+          <td class="host" title="<%= esc(hostname) %>"><%= esc(hostname) %></td>
+          <td class="mono"><%= esc(ip) %></td>
+          <td class="mono"><%= esc(mac) %></td>
+          <td><%= vendor_h %></td>
+          <td class="col-type"><span class="badge type"><%= stype %></span></td>
+          <td><%= status_h %></td>
+          <td class="traffic"><%= fmt(rx) %></td>
+          <td class="traffic"><%= fmt(tx) %></td>
+          <td class="col-rate"><span class="rate">↓<%= fmt_rate(rxr) %> ↑<%= fmt_rate(txr) %></span></td>
+          <td><span class="badge"><%= active %>/<%= total_f %></span></td>
+          <td class="col-app"><%= apps_h %></td>
+        </tr>
 <%
 end
-if i == 0 then
--%>
-    <tr><td colspan="12" class="empty">暂无设备（未读取到 dhcp.leases 或 conntrack 为空）</td></tr>
+if #devices == 0 then
+%>
+        <tr><td colspan="11" style="text-align:center;padding:40px;color:var(--muted)">暂无设备数据</td></tr>
 <%
 end
 -%>
-  </tbody>
-</table>
-</div>
+      </tbody>
+    </table>
+  </div>
 
-<% if next(global_apps) ~= nil then %>
-<h3>📊 全局 App 使用排行（按 DNS 查询次数）</h3>
-<div class="tablebox">
-<table class="rank">
-  <thead><tr><th>App</th><th>查询次数</th><th>占比</th><th>涉及设备</th></tr></thead>
-  <tbody>
-<%
-    local rows = {}
-    for name, s in pairs(global_apps) do
-        table.insert(rows, { name=name, q=s.queries or 0, d=s.devices or 0 })
-    end
-    table.sort(rows, function(a,b) return a.q > b.q end)
-    for _, r in ipairs(rows) do
-        local c = APP_COLORS[r.name] or "#94a3b8"
-        local pct = max_app_q > 0 and math.floor(r.q / max_app_q * 100) or 0
--%>
-    <tr>
-      <td><span class="apps"><span style="background:<%= c %>"><%= r.name %></span></span></td>
-      <td class="mono"><%= r.q %></td>
-      <td><div class="rb"><i style="width:<%= pct %>%;background:<%= c %>"></i></div></td>
-      <td class="mono"><%= r.d %></td>
-    </tr>
-<%
-    end
--%>
-  </tbody>
-</table>
-</div>
-<% end %>
-
-<a class="btn" href="?">立即刷新</a>
+  <div style="margin-top:16px;text-align:center">
+    <a href="?" class="btn">🔄 立即刷新</a>
+    <span style="font-size:11px;color:var(--muted);margin-left:12px">数据：dhcp.leases + conntrack + DNS 日志</span>
+  </div>
 </div>
 
 <script>
-  var t = 15;
-  var cd = document.getElementById('cd'), rb = document.getElementById('rb');
-  setInterval(function(){
-    t = t > 0 ? t - 1 : 0;
-    if (cd) cd.textContent = t;
-    if (rb) rb.style.width = (t/15*100) + '%';
-  }, 1000);
+// 排序状态
+let sortBy = 'hostname';
+let sortDir = 1;
+const colVis = { type:true, rate:true, app:true };
+
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// 渲染表格
+function renderTable(list) {
+    const tbody = document.getElementById('table-body');
+    tbody.innerHTML = list.map((row, i) => `
+        <tr data-host="${esc(row.hostname)}" data-ip="${esc(row.ip)}" data-mac="${esc(row.mac)}">
+          <td class="host">${esc(row.hostname)}</td>
+          <td class="mono">${esc(row.ip)}</td>
+          <td class="mono">${esc(row.mac)}</td>
+          <td>${esc(row.vendor || '—')}</td>
+          <td class="col-type"><span class="badge type">${esc(row.type || '其他')}</span></td>
+          <td>${row.online ? '<span class="badge on">● 在线</span>' : '<span class="badge off">离线</span>'}</td>
+          <td class="traffic">${row.rx}</td>
+          <td class="traffic">${row.tx}</td>
+          <td class="col-rate"><span class="rate">${row.rate}</span></td>
+          <td><span class="badge">${row.flows}</span></td>
+          <td class="col-app">${row.apps}</td>
+        </tr>
+    `).join('');
+    document.getElementById('row-count').textContent = `显示 ${list.length} 台`;
+}
+
+// 搜索过滤
+document.getElementById('search').addEventListener('input', function() {
+    const q = this.value.toLowerCase().trim();
+    const rows = Array.from(document.querySelectorAll('#table-body tr'));
+    const filtered = rows.filter(r => {
+        if (!q) return true;
+        return r.dataset.hostname.includes(q) || r.dataset.ip.includes(q) || r.dataset.mac.toLowerCase().includes(q);
+    });
+    renderFiltered(filtered);
+});
+
+// 排序
+function sortTable(key) {
+    if (sortBy === key) sortDir *= -1; else { sortBy = key; sortDir = 1; }
+    sortAndRender();
+}
+
+function sortAndRender() {
+    // 重新从 DOM 读取数据排序
+    const rows = Array.from(document.querySelectorAll('#table-body tr'));
+    rows.sort((a, b) => {
+        const va = a.dataset[sortBy] || '';
+        const vb = b.dataset[sortBy] || '';
+        return va.localeCompare(vb) * sortDir;
+    });
+    rows.forEach(r => document.getElementById('table-body').appendChild(r));
+    document.getElementById('row-count').textContent = `显示 ${rows.length} 台`;
+}
+
+// 列切换
+function toggleCol(col) {
+    colVis[col] = !colVis[col];
+    document.querySelectorAll(`.col-${col}`).forEach(el => {
+        el.style.display = colVis[col] ? '' : 'none';
+    });
+}
+
+// 过滤显示
+function renderFiltered(filtered) {
+    const allRows = Array.from(document.querySelectorAll('#table-body tr'));
+    allRows.forEach(r => r.style.display = 'none');
+    filtered.forEach(r => r.style.display = '');
+    document.getElementById('row-count').textContent = `显示 ${filtered.length} 台`;
+}
+
+// 倒计时
+(function() {
+    let sec = 10;
+    const el = document.getElementById('countdown');
+    const bar = document.getElementById('refresh-bar');
+    setInterval(() => {
+        sec--; if (sec < 0) sec = 10;
+        el.textContent = sec + 's';
+        bar.style.animation = 'none';
+        bar.offsetHeight;
+        bar.style.animation = 'countdown 10s linear forwards';
+    }, 1000);
+})();
 </script>
 </body>
 </html>

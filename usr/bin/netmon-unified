@@ -127,6 +127,20 @@ for ip, stats in ip_data.items():
     new_state[ip] = {'t': now, 'rx': stats['rx'], 'tx': stats['tx']}
 save_state(new_state)
 
+# 合并 App 数据（从 netmon-apptrace.py）
+app_by_ip = {}
+try:
+    import subprocess
+    result = subprocess.run(['/usr/bin/netmon-apptrace.py'], capture_output=True, text=True, timeout=5)
+    if result.returncode == 0:
+        app_json = json.loads(result.stdout)
+        for dev in app_json.get('devices', []):
+            ip = dev.get('ip')
+            if ip:
+                app_by_ip[ip] = dev.get('apps', {})
+except Exception as e:
+    print(f"读取 App 数据失败: {e}", file=sys.stderr)
+
 # 合并数据
 devices = []
 for ip, stats in sorted(ip_data.items(), key=lambda x: x[1]['rx']+x[1]['tx'], reverse=True)[:30]:
@@ -146,6 +160,9 @@ for ip, stats in sorted(ip_data.items(), key=lambda x: x[1]['rx']+x[1]['tx'], re
             rx_rate = max(0.0, (stats['rx'] - prev[ip].get('rx', 0)) / dt)
             tx_rate = max(0.0, (stats['tx'] - prev[ip].get('tx', 0)) / dt)
 
+    # App 使用数据
+    apps = app_by_ip.get(ip, {})
+
     devices.append({
         'ip': ip,
         'mac': mac,
@@ -160,6 +177,7 @@ for ip, stats in sorted(ip_data.items(), key=lambda x: x[1]['rx']+x[1]['tx'], re
         'active_flows': stats['active'],
         'total_flows': stats['flows'],
         'source': 'dhcp' if ip in leases else 'neigh',
+        'apps': apps,
     })
 
 # App 分类
