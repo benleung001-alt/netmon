@@ -18,7 +18,7 @@ import tarfile
 import struct
 import io
 
-OUT_IPK = "netmon_1.0.6-1_all.ipk"
+OUT_IPK = "netmon_1.0.7-1_all.ipk"
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 源文件 -> 路由器目标路径（去掉开头的 /）
