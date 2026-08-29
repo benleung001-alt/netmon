@@ -54,7 +54,7 @@ local function fmt(b)
     if b >= 1073741824 then return string.format("%.2fGB", b/1073741824)
     elseif b >= 1048576 then return string.format("%.2fMB", b/1048576)
     elseif b >= 1024 then return string.format("%.1fKB", b/1024)
-    else return string.format("%dB", b) end
+    else return string.format("%dB", math.floor(b + 0.5)) end
 end
 
 -- 格式化速率
