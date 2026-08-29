@@ -61,7 +61,7 @@ end
 local function fmt_rate(bps)
     bps = tonumber(bps) or 0
     if bps >= 1024 then return string.format("%.1fKB/s", bps/1024)
-    else return string.format("%dB/s", bps) end
+    else return string.format("%.0fB/s", bps) end
 end
 -%>
 <!DOCTYPE html>
