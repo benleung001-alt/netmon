@@ -34,6 +34,7 @@ FILES = [
     ("usr/share/netmon/oui.txt",               "usr/share/netmon/oui.txt",              0o0644),
     ("usr/lib/lua/luci/controller/netmon.lua", "usr/lib/lua/luci/controller/netmon.lua",0o0644),
     ("usr/lib/lua/luci/view/netmon/devices.htm","usr/lib/lua/luci/view/netmon/devices.htm",0o0644),
+    ("scripts/netmon-check.sh",                "usr/bin/netmon-check",                   0o0755),
 ]
 
 CONTROL = """Package: netmon
@@ -49,7 +50,7 @@ Description: DHCP device list with hostname / vendor / random-MAC detection + 40
 
 POSTINST = """#!/bin/sh
 # 安装后赋予脚本执行权限并刷新 LuCI 让菜单生效
-chmod 0755 /usr/bin/netmon-devices /usr/bin/netmon-unified /usr/bin/netmon-bandwidth.py /usr/bin/netmon-apptrace.py /usr/bin/netmon-report /usr/bin/netmon-mail-report 2>/dev/null
+chmod 0755 /usr/bin/netmon-devices /usr/bin/netmon-unified /usr/bin/netmon-bandwidth.py /usr/bin/netmon-apptrace.py /usr/bin/netmon-report /usr/bin/netmon-mail-report /usr/bin/netmon-check 2>/dev/null
 chmod 0600 /etc/netmon-mail.conf 2>/dev/null
 /etc/init.d/uhttpd restart 2>/dev/null
 # 配置每日采集+cron（每天 23:30，生成报告并邮件发送），仅追加一次，不覆盖用户其它任务
