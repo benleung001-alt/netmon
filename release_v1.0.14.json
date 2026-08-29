@@ -1,5 +1,0 @@
-{
-    "tag_name": "v1.0.14",
-    "name": "NetMon v1.0.14 - 最终修复",
-    "body": "### 修复说明\n\n彻底解决 Lua 5.3+ 严格模式的类型错误。\n\n**fmt_rate 函数（原问题所在）：**\n- 使用 tostring(math.floor(bps)) 拼接字符串\n- 避免使用 %d 格式符处理浮点数\n\n**fmt 函数：**\n- 使用 math.floor(b + 0.5) 确保整数\n\n**App 标签：**\n- 使用 math.floor(ac + 0.5) 确保整数\n\n请卸载旧版本后安装此版本。"
-}
