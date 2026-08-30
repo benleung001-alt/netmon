@@ -18,7 +18,7 @@ import tarfile
 import struct
 import io
 
-OUT_IPK = "netmon_1.0.14-1_all.ipk"
+OUT_IPK = "netmon_1.0.15-1_all.ipk"
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 源文件 -> 路由器目标路径（去掉开头的 /）
@@ -35,10 +35,11 @@ FILES = [
     ("usr/lib/lua/luci/controller/netmon.lua", "usr/lib/lua/luci/controller/netmon.lua",0o0644),
     ("usr/lib/lua/luci/view/netmon/devices.htm","usr/lib/lua/luci/view/netmon/devices.htm",0o0644),
     ("scripts/netmon-check.sh",                "usr/bin/netmon-check",                   0o0755),
+    ("scripts/diagnose-netmon.sh",             "usr/bin/diagnose-netmon",                0o0755),
 ]
 
 CONTROL = """Package: netmon
-Version: 1.0.14-1
+Version: 1.0.15-1
 Section: net
 Priority: optional
 Architecture: all
