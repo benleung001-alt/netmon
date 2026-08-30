@@ -54,7 +54,7 @@ local function fmt(b)
     if b >= 1073741824 then return string.format("%.2fGB", b/1073741824)
     elseif b >= 1048576 then return string.format("%.2fMB", b/1048576)
     elseif b >= 1024 then return string.format("%.1fKB", b/1024)
-    else return string.format("%dB", math.floor(b + 0.5)) end
+    else return tostring(math.floor(b)) .. "B" end
 end
 
 -- 格式化速率
@@ -206,7 +206,7 @@ for i, dev in ipairs(devices) do
         for j, aname in ipairs(app_keys) do
             local ac = apps[aname] or 0
             local col = APP_COLORS[aname] or "#6b7280"
-            apps_h = apps_h .. string.format('<span class="app-tag" style="background:%s" title="%s: %d次">%s(%d)</span> ', col, aname, math.floor(ac + 0.5), esc(aname), math.floor(ac + 0.5))
+            apps_h = apps_h .. '<span class="app-tag" style="background:' .. col .. '" title="' .. aname .. ': ' .. tostring(math.floor(ac)) .. '次">' .. esc(aname) .. '(' .. tostring(math.floor(ac)) .. ')</span> '
         end
     else
         apps_h = '<span class="no-app">—</span>'
