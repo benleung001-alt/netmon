@@ -1,0 +1,13 @@
+usr/bin/netmon-devices
+usr/bin/netmon-devices.awk
+usr/bin/netmon-unified
+usr/bin/netmon-bandwidth.py
+usr/bin/netmon-apptrace.py
+usr/bin/netmon-report
+usr/bin/netmon-mail-report
+etc/netmon-mail.conf
+usr/share/netmon/oui.txt
+usr/lib/lua/luci/controller/netmon.lua
+usr/lib/lua/luci/view/netmon/devices.htm
+usr/bin/netmon-check
+usr/bin/diagnose-netmon
